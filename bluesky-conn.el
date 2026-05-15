@@ -25,8 +25,10 @@
 ;; use plists and arrays.
 
 (require 'json)
+(require 'futur)
 (require 'plz)
 (require 'seq)
+(require 'subr-x)
 
 ;;; Code:
 
@@ -45,7 +47,38 @@ the Bluesky API.")
   (let ((json-object-type 'plist))
     (json-read-from-string str)))
 
-(defun bluesky-conn-call (host http-method method auth-header on-success on-error &rest args)
+(define-error 'bluesky-api-error "Bluesky API error")
+
+(defun bluesky-conn--clean-args (args)
+  "Return ARGS with nil-valued plist entries removed."
+  (flatten-list (funcall #'append
+                         (seq-filter (lambda (double)
+                                       (not (null (cadr double))))
+                                     (seq-partition args 2)))))
+
+(defun bluesky-conn--api-error-json (error-object)
+  "Return the JSON error payload in ERROR-OBJECT, if present."
+  (cadr error-object))
+
+(defun bluesky-conn--parse-plz-error (resp)
+  "Parse the Bluesky JSON error payload from RESP."
+  (if-let* ((err-resp (plz-error-response resp))
+            (body (plz-response-body err-resp)))
+      (bluesky-conn-json-read-from-string body)
+    (list :error "HTTPError"
+          :message (format "No error response found in %S" resp))))
+
+(defun bluesky-conn--query-string (args)
+  "Return URL query string for plist ARGS."
+  (mapconcat (lambda (pair)
+               (format "%s=%s"
+                       (url-hexify-string
+                        (substring-no-properties (symbol-name (car pair)) 1))
+                       (url-hexify-string (format "%s" (cadr pair)))))
+             (seq-partition args 2)
+             "&"))
+
+(defun bluesky-conn-call (host http-method method auth-header &rest args)
   "Call METHOD on the Bluesky instance at HOST.
 
 HTTP-METHOD is the HTTP method to use, such as `get' or `post'.
@@ -54,75 +87,62 @@ AUTH-HEADER is the value to use for the bearer authorization header; if
 nil it is assumed this is a public endpoint.  ARGS is a plist, but any
 values that are nil will be ignored.
 
-ON-SUCCESS is a function that will be called with the response from the
-Bluesky API. If ON-SUCCESS is nil, the request will be made
-syncronously, and a JSON object will be returned.
-
-ON-ERROR handles all errors."
-  (let* ((args (flatten-list (funcall #'append
-                                      (seq-filter (lambda (double)
-                                                    (not (null (cadr double))))
-                                                  (seq-partition args 2)))))
+Return a `futur' that resolves to the JSON response or fails with
+`bluesky-api-error'."
+  (let* ((args (bluesky-conn--clean-args args))
          (url (format "https://%s/xrpc/%s%s" host method
                       (if (and args (eq 'get http-method))
-                          (let ((params (mapconcat (lambda (pair)
-                                                     (format "%s=%s" (url-hexify-string (substring-no-properties (symbol-name (car pair)) 1))
-                                                             (url-hexify-string (format "%s" (cadr pair)))))
-                                                   args
-                                                   "&")))
-                            (concat "?" params))
+                          (concat "?" (bluesky-conn--query-string args))
                         "")))
          (headers (append
                    (when auth-header `(("Authorization" .
                                         ,(format "Bearer %s" auth-header))))
                    '(("Content-Type" . "application/json")))))
-    (condition-case err
-        (apply #'plz http-method url :as #'bluesky-conn-json-read
-               :headers headers
-               (append
-                (when (and args (eq http-method 'post))
-                  (list :body (json-encode args)))
-                (when on-success (list :then on-success))
-                (when (and on-success on-error)
-                  (list :else
-                        (lambda (resp)
-                          (if-let ((err-resp (plz-error-response resp))
-                                   (err (bluesky-conn-json-read-from-string
-                                         (plz-response-body err-resp))))
-                              (funcall on-error err)
-                            (error "No error response found in %s" resp)))))))
-      (plz-error
-       (if on-error
-           (if-let* ((err-resp (plz-error-response (nth 2 err)))
-                     (err (bluesky-conn-json-read-from-string (plz-response-body err-resp))))
-               (funcall on-error err)
-             (error "No error response found in %s" err))
-         (error "Unhandled error: %s" err))))))
+    (futur-new
+     (lambda (futur)
+       (condition-case err
+           (apply #'plz http-method url
+                  :as #'bluesky-conn-json-read
+                  :headers headers
+                  :then (lambda (resp)
+                          (futur-deliver-value futur resp))
+                  :else (lambda (resp)
+                          (futur-deliver-failure
+                           futur
+                           (list 'bluesky-api-error
+                                 (bluesky-conn--parse-plz-error resp))))
+                  (when (and args (eq http-method 'post))
+                    (list :body (json-encode args))))
+         (plz-error
+          (futur-deliver-failure
+           futur
+           (list 'bluesky-api-error
+                 (bluesky-conn--parse-plz-error (nth 2 err)))))
+         (error
+          (futur-deliver-failure futur err)))
+       nil))))
 
-(defun bluesky-conn-call-authed (host handle method on-success on-error &rest args)
+(defun bluesky-conn-call-authed (host handle http-method method &rest args)
   "Call METHOD on the Bluesky instance at HOST using HANDLE.
+HTTP-METHOD is the HTTP method to use, such as `get' or `post'.
 ARGS is a plist, but any values that are nil will be ignored.
 
-ON-SUCCESS is a function that will be called with the response from the
-Bluesky API.
-
-ON-ERROR is a function that will be called with an error JSON object.
-
 This function assumes that a session has been created, and will handle
-auth refreshes."
+auth refreshes.  Return a `futur'."
   (let ((session (alist-get (format "%s/%s" host handle)
                             bluesky-session
                             nil nil #'equal)))
     (unless session
       (error "Unable to get the Bluesky authentication token, you may need to log in first."))
-    (apply #'bluesky-conn-call host 'get method (plist-get session :accessJwt)
-           on-success
-           (lambda (err)
-             (if (equal "ExpiredToken" (plist-get err :error))
-                 (progn (bluesky-conn-refresh-session host handle)
-                        (apply #'bluesky-conn-call-authed host handle method on-success on-error args))
-               (when on-error (funcall on-error resp))))
-           args)))
+    (futur-bind
+     (apply #'bluesky-conn-call host http-method method (plist-get session :accessJwt) args)
+     #'futur-done
+     (lambda (err)
+       (let ((api-error (bluesky-conn--api-error-json err)))
+         (if (equal "ExpiredToken" (plist-get api-error :error))
+             (futur-let* ((_ <- (bluesky-conn-refresh-session host handle)))
+               (apply #'bluesky-conn-call-authed host handle http-method method args))
+           (futur-failed err)))))))
 
 (defun bluesky-conn-create-session (host handle password)
   "Create a session with the Bluesky API at HOST using HANDLE and PASSWORD.
@@ -130,17 +150,18 @@ HANDLE is the user's handle on the Bluesky instance at HOST (without any
 leading `@'), and PASSWORD is the user's password, or a function that
 takes no arguments that produces it. This function will store the
 session object in `bluesky-session' for future use, and also return it."
-  (let ((result (bluesky-conn-call
-                 host 'post "com.atproto.server.createSession" nil nil nil
-                 :identifier handle :password (if (functionp password)
-                                                  (funcall password)
-                                                password))))
-    (if result
-        (setf (alist-get (format "%s/%s" host handle)
-                         bluesky-session
-                         nil nil #'equal)
-              result)
-      (error "Unable to create a session for host %s" host))))
+  (futur-bind
+   (bluesky-conn-call
+    host 'post "com.atproto.server.createSession" nil
+    :identifier handle :password (if (functionp password)
+                                     (funcall password)
+                                   password))
+   (lambda (result)
+     (setf (alist-get (format "%s/%s" host handle)
+                      bluesky-session
+                      nil nil #'equal)
+           result)
+     result)))
 
 (defun bluesky-conn-get-session (host handle)
   "Get a session for HANDLE at HOST."
@@ -151,19 +172,25 @@ session object in `bluesky-session' for future use, and also return it."
   (let ((session (bluesky-conn-get-session host handle)))
     (unless session
       (error "No session found to refresh for host %s" host))
-    (setf (alist-get (format "%s/%s" host handle)
-                     bluesky-session
-                     nil nil #'equal)
-          (bluesky-conn-call host 'post "com.atproto.server.refreshSession"
-                             (plist-get session :refreshJwt) nil
-                             nil))))
+    (futur-bind
+     (bluesky-conn-call host 'post "com.atproto.server.refreshSession"
+                        (plist-get session :refreshJwt))
+     (lambda (result)
+       (setf (alist-get (format "%s/%s" host handle)
+                        bluesky-session
+                        nil nil #'equal)
+             result)
+       result))))
 
 (defun bluesky-conn-create-post (host handle collection record)
   "Create a post in the Bluesky instance at HOST using HANDLE.
 COLLECTION is the collection to post to, and RECORD is the record, created by
 `bluesky-conn-record', to post."
   (bluesky-conn-call-authed
-   host handle "com.atproto.server.createPost" nil nil :collection collection :record record))
+   host handle 'post "com.atproto.repo.createRecord"
+   :repo (plist-get (bluesky-conn-get-session host handle) :did)
+   :collection collection
+   :record record))
 
 (defun bluesky-conn-record (text langs facets)
   (append `(:text ,text :createdAt ,(format-time-string "%Y-%m-%dT%H:%M:%SZ"))
@@ -176,8 +203,8 @@ The CURSOR defines where to start at, and LIMIT is the number of posts
 to return."
   (unless (or (null limit) (and (> limit 0) (< limit 100)))
     (error "Number of posts to retrieve must be between 0 and 100"))
-  (bluesky-conn-call-authed host handle "app.bsky.feed.getTimeline"
-                            nil nil :cursor cursor :limit limit))
+  (bluesky-conn-call-authed host handle 'get "app.bsky.feed.getTimeline"
+                            :cursor cursor :limit limit))
 
 (defvar bluesky-conn-cache (make-hash-table :test 'equal)
   "A cache of Bluesky API responses, keyed by URLs.
@@ -186,7 +213,7 @@ Anything in here is assumed to be cacheable indefinitely.")
 (defun bluesky-conn-get-image-by-url (url)
   "Get an image at URL, using the cache if available."
   (or (gethash url bluesky-conn-cache)
-      (puthash url (create-image (plz 'get url :as #'binary) nil 'data) bluesky-conn-cache)))
+      (puthash url (create-image (plz 'get url :as 'binary) nil 'data) bluesky-conn-cache)))
 
 (defun bluesky-conn-get-blob (host did cid)
   "Get a blob with id CID from account DID."

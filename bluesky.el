@@ -4,7 +4,7 @@
 
 ;; Author: Andrew Hyatt <ahyatt@gmail.com>
 ;; Homepage: https://github.com/ahyatt/ekg
-;; Package-Requires: ((plz "0.9.0))
+;; Package-Requires: ((plz "0.9.0") (futur "1.7") (vui "20260130.2113"))
 ;; Keywords: outlines, hypermedia
 ;; Version: 0.0.0
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -30,7 +30,11 @@
 
 (require 'bluesky-conn)
 (require 'bluesky-ui)
-(require 'ewoc)
+(require 'auth-source)
+(require 'cl-lib)
+(require 'futur)
+(require 'subr-x)
+(require 'vui)
 
 (defgroup bluesky nil
   "Bluesky client for Emacs."
@@ -44,18 +48,50 @@
 (defconst bluesky-timeline-buffer-name "*Bluesky Timeline*"
   "The name of the Bluesky timeline buffer.")
 
+(defface bluesky-heading
+  '((t :inherit bold :height 1.2))
+  "Face for Bluesky buffer headings.")
+
+(defface bluesky-error
+  '((t :inherit error))
+  "Face for Bluesky errors.")
+
+(defface bluesky-muted
+  '((t :inherit shadow))
+  "Face for subdued Bluesky UI text.")
+
+(defface bluesky-current-post
+  '((t :inherit highlight :extend t))
+  "Face for the currently selected Bluesky post.")
+
+(defvar-local bluesky--navigation-override-mode nil
+  "Non-nil when Bluesky navigation keys should override minor modes.")
+
+(defvar bluesky--navigation-override-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "j") #'bluesky-feed-next-post)
+    (define-key map (kbd "k") #'bluesky-feed-previous-post)
+    map)
+  "High-precedence keymap for Bluesky navigation.")
+
+(add-to-list 'emulation-mode-map-alists
+             `((bluesky--navigation-override-mode
+                . ,bluesky--navigation-override-map)))
+
 (defvar bluesky-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map "g" #'bluesky-feed-refresh)
-    (define-key map "n" #'bluesky-feed-next-post)
-    (define-key map "p" #'bluesky-feed-previous-post)
+    (define-key map "j" #'bluesky-feed-next-post)
+    (define-key map "k" #'bluesky-feed-previous-post)
+    (define-key map "l" #'bluesky-feed-extend)
     map)
   "Keymap for Bluesky feed mode.")
 
-(define-derived-mode bluesky-mode special-mode "Bluesky"
+(define-derived-mode bluesky-mode vui-mode "Bluesky"
   "Major mode for Bluesky buffers consisting of lists of posts."
   (setq truncate-lines t)
   (buffer-disable-undo)
+  (setq-local bluesky--navigation-override-mode t)
   (visual-line-mode 1))
 
 (defvar-local bluesky-host bluesky-default-host
@@ -64,37 +100,243 @@
 (defvar-local bluesky-feed-session nil
   "The Bluesky feed session associated with the buffer's feed.")
 
-(defvar-local bluesky-feed-reader nil
-  "A function to read the next part of the feed.")
+(defvar-local bluesky-feed-root nil
+  "The VUI root instance for the Bluesky feed.")
 
-(defvar-local bluesky-feed-cursor nil
-  "The cursor for the current feed.")
+(defvar-local bluesky-current-post-overlay nil
+  "Overlay highlighting the current Bluesky post.")
 
-(defvar-local bluesky-feed-refresher nil
-  "A function to refresh the feed.")
+(defun bluesky--future-set-state (future state-key value-fn error-key)
+  "Set VUI STATE-KEY from FUTURE using VALUE-FN, or ERROR-KEY on failure."
+  (futur-bind
+   future
+   (vui-async-callback (value)
+     (vui-batch
+       (vui-set-state state-key (funcall value-fn value))
+       (vui-set-state :loading nil)
+       (vui-set-state :error nil)))
+   (vui-async-callback (err)
+     (vui-batch
+       (vui-set-state :loading nil)
+       (vui-set-state error-key err)))))
 
-(defvar-local bluesky-ewoc nil
-  "The ewoc for the Bluesky feed.")
+(defun bluesky--error-message (err)
+  "Return a readable error string for ERR."
+  (if-let* ((payload (and (consp err) (eq (car err) 'bluesky-api-error)
+                          (cadr err)))
+            (message (or (plist-get payload :message)
+                         (plist-get payload :error))))
+      message
+    (error-message-string err)))
 
-(defun bluesky-feed-render (feed)
-  "Add to buffer's ewoc the posts in FEED."
-  (dolist (post (append (plist-get feed :feed) nil))
-    (ewoc-enter-last bluesky-ewoc (plist-get post :post))))
+(defun bluesky--post-id (post)
+  "Return a stable id for POST."
+  (or (plist-get post :uri)
+      (plist-get post :cid)
+      (secure-hash 'sha1 (prin1-to-string post))))
+
+(defun bluesky--quoted-post (post)
+  "Return POST's quoted post view, if present."
+  (let* ((embed (or (plist-get post :embed)
+                    (plist-get (plist-get post :record) :embed)))
+         (quoted (plist-get embed :record))
+         (value (plist-get quoted :value)))
+    (when (and quoted value (plist-get quoted :author))
+      (let ((quoted-post (copy-sequence quoted)))
+        (setq quoted-post (plist-put quoted-post :record value))
+        quoted-post))))
+
+(defun bluesky--flatten-posts (posts &optional depth max-depth)
+  "Return a depth-first flat list of navigable POSTS.
+DEPTH defaults to 0 and MAX-DEPTH defaults to 1, so top-level posts and
+one quoted-post level are included."
+  (let ((depth (or depth 0))
+        (max-depth (or max-depth 1))
+        items)
+    (dolist (post posts (nreverse items))
+      (let ((id (bluesky--post-id post)))
+        (push (list :id id :post post :depth depth) items)
+        (when (< depth max-depth)
+          (dolist (child (bluesky--flatten-posts
+                          (delq nil (list (bluesky--quoted-post post)))
+                          (1+ depth)
+                          max-depth))
+            (push child items)))))))
+
+(defun bluesky--timeline-state (key)
+  "Return timeline component state KEY in the current buffer."
+  (when bluesky-feed-root
+    (plist-get (vui-instance-state bluesky-feed-root) key)))
+
+(defun bluesky--set-timeline-state (key value)
+  "Set timeline component state KEY to VALUE in the current buffer."
+  (unless bluesky-feed-root
+    (user-error "No Bluesky feed is active in this buffer"))
+  (let ((vui--root-instance bluesky-feed-root)
+        (vui--current-instance bluesky-feed-root))
+    (vui-set-state key value)))
+
+(defun bluesky--item-bounds (item-id)
+  "Return buffer bounds for navigable ITEM-ID."
+  (let ((pos (point-min))
+        start end)
+    (while (< pos (point-max))
+      (let* ((next (next-single-property-change
+                    pos 'bluesky-item-id nil (point-max)))
+             (value (get-text-property pos 'bluesky-item-id)))
+        (when (equal value item-id)
+          (setq start (or start pos))
+          (setq end next))
+        (setq pos (max (1+ pos) next))))
+    (when (and start end)
+      (cons (save-excursion
+              (goto-char start)
+              (line-beginning-position))
+            (save-excursion
+              (goto-char end)
+              (line-end-position))))))
+
+(defun bluesky--highlight-selected (item-id)
+  "Highlight ITEM-ID in the current buffer."
+  (when (and (overlayp bluesky-current-post-overlay)
+             (overlay-buffer bluesky-current-post-overlay))
+    (delete-overlay bluesky-current-post-overlay)
+    (setq bluesky-current-post-overlay nil))
+  (when-let* ((bounds (and item-id (bluesky--item-bounds item-id))))
+    (setq bluesky-current-post-overlay (make-overlay (car bounds) (cdr bounds)))
+    (overlay-put bluesky-current-post-overlay 'face 'bluesky-current-post)
+    (overlay-put bluesky-current-post-overlay 'priority 10)
+    (goto-char (car bounds))))
+
+(defun bluesky--schedule-highlight (item-id)
+  "Highlight ITEM-ID after the current render cycle settles."
+  (let ((buffer (current-buffer)))
+    (run-with-timer
+     0.05 nil
+     (lambda ()
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (bluesky--highlight-selected item-id)))))))
+
+(defun bluesky--move-selection (delta)
+  "Move current timeline selection by DELTA."
+  (let* ((items (bluesky--timeline-state :items))
+         (ids (mapcar (lambda (item) (plist-get item :id)) items))
+         (selected-id (bluesky--timeline-state :selected-id))
+         (index (or (cl-position selected-id ids :test #'equal) 0))
+         (next-index (max 0 (min (1- (length ids)) (+ index delta)))))
+    (unless ids
+      (user-error "No posts loaded"))
+    (let ((next-id (nth next-index ids)))
+      (bluesky--set-timeline-state :selected-id next-id)
+      (bluesky--schedule-highlight next-id))))
 
 (defun bluesky-feed-refresh ()
   "Refresh the Bluesky feed."
   (interactive)
-  (ewoc-delete bluesky-ewoc)
-  (let ((feed (funcall bluesky-feed-refresher)))
-    (setq bluesky-feed-cursor (plist-get feed :cursor))
-    (bluesky-feed-render feed)))
+  (if bluesky-feed-root
+      (let ((vui--root-instance bluesky-feed-root)
+            (vui--current-instance bluesky-feed-root))
+        (vui-set-state :refresh-requested (current-time)))
+    (user-error "No Bluesky feed is active in this buffer")))
 
 (defun bluesky-feed-extend ()
   "Load the Bluesky feed."
   (interactive)
-  (let ((feed (funcall bluesky-feed-reader)))
-    (setq bluesky-feed-cursor (plist-get feed :cursor))
-    (bluesky-feed-render feed)))
+  (if bluesky-feed-root
+      (let ((vui--root-instance bluesky-feed-root)
+            (vui--current-instance bluesky-feed-root))
+        (vui-set-state :extend-requested (current-time)))
+    (user-error "No Bluesky feed is active in this buffer")))
+
+(defun bluesky-feed-next-post ()
+  "Move to the next post in the timeline."
+  (interactive)
+  (bluesky--move-selection 1))
+
+(defun bluesky-feed-previous-post ()
+  "Move to the previous post in the timeline."
+  (interactive)
+  (bluesky--move-selection -1))
+
+(vui-defcomponent bluesky-timeline (host handle)
+  "Render a Bluesky timeline."
+  :state ((posts nil)
+          (cursor nil)
+          (loading nil)
+          (error nil)
+          (items nil)
+          (selected-id nil)
+          (refresh-requested nil)
+          (extend-requested nil))
+  :render
+  (progn
+    (let ((current-items (bluesky--flatten-posts posts)))
+      (vui-use-effect (posts selected-id)
+        (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
+          (vui-batch
+            (vui-set-state :items current-items)
+            (when (and ids (not (member selected-id ids)))
+              (vui-set-state :selected-id (car ids)))))
+        nil))
+    (vui-use-effect (selected-id items)
+      (bluesky--schedule-highlight selected-id)
+      nil)
+    (vui-use-effect (host handle refresh-requested)
+      (vui-batch
+        (vui-set-state :loading t)
+        (vui-set-state :error nil))
+      (bluesky--future-set-state
+       (bluesky-conn-get-timeline host handle nil 50)
+       :posts
+       (lambda (feed)
+         (vui-batch
+           (vui-set-state :cursor (plist-get feed :cursor)))
+         (mapcar (lambda (entry) (plist-get entry :post))
+                 (append (plist-get feed :feed) nil)))
+       :error)
+      nil)
+    (vui-use-effect (extend-requested)
+      (when (and extend-requested cursor (not loading))
+        (vui-batch
+          (vui-set-state :loading t)
+          (vui-set-state :error nil))
+        (bluesky--future-set-state
+         (bluesky-conn-get-timeline host handle cursor 50)
+         :posts
+         (lambda (feed)
+           (vui-batch
+             (vui-set-state :cursor (plist-get feed :cursor)))
+           (append posts
+                   (mapcar (lambda (entry) (plist-get entry :post))
+                           (append (plist-get feed :feed) nil))))
+         :error))
+      nil)
+    (vui-vstack
+     (vui-hstack
+      (vui-text (format "Timeline for %s" handle) :face 'bluesky-heading)
+      (vui-button "Refresh"
+        :on-click (lambda ()
+                    (vui-set-state :refresh-requested (current-time)))))
+     (when error
+       (vui-text (bluesky--error-message error) :face 'bluesky-error))
+     (when loading
+       (vui-text "Loading..." :face 'bluesky-muted))
+     (if items
+         (vui-list items
+                   (lambda (item)
+                     (bluesky-ui-post host
+                                      (plist-get item :post)
+                                      (plist-get item :id)
+                                      (plist-get item :depth)))
+                   (lambda (item) (plist-get item :id))
+                   :spacing 1)
+       (unless loading
+         (vui-text "No posts loaded." :face 'bluesky-muted)))
+     (when cursor
+       (vui-button "Load more"
+         :on-click (lambda ()
+                     (vui-set-state :extend-requested (current-time))))))))
 
 (defun bluesky-connect (&optional username password host)
   "Connect to a Bluesky server.
@@ -117,27 +359,43 @@ user will be prompted for the password."
          (password (or password
                        (when authinfo
                          (plist-get authinfo :secret))
-                       (read-passwd "Password: "))))
+                       (read-passwd "Password: ")))
+         (cached-session (and username
+                              (bluesky-conn-get-session host username))))
     (unless (and username password)
       (error "Username and password are required"))
-    (with-current-buffer (get-buffer-create bluesky-timeline-buffer-name)
-      (setq buffer-read-only nil)
-      (erase-buffer)
-      (bluesky-mode)
-      (setq-local bluesky-host host)
-      (setq-local bluesky-feed-session
-                  (if-let ((session (bluesky-conn-get-session host username)))
-                      session
-                    (bluesky-conn-create-session host username password)))
-      (let ((handle (plist-get bluesky-feed-session :handle)))
-        (setq-local bluesky-feed-reader
-                    (lambda () (bluesky-conn-get-timeline
-                                host handle :cursor bluesky-feed-cursor)))
-        (setq-local bluesky-feed-refresher
-                    (lambda () (bluesky-conn-get-timeline host handle)))
-        (setq-local bluesky-ewoc (ewoc-create #'bluesky-ui-render-post
-                                              (format "Timeline for %s" handle))))
-      (bluesky-feed-refresh)
-      (display-buffer bluesky-timeline-buffer-name))))
+    (message "Bluesky: using %s for %s"
+             (cond
+              (cached-session "cached session")
+              (authinfo "auth-source credentials")
+              (t "prompted credentials"))
+             host)
+    (futur-bind
+     (or cached-session
+         (bluesky-conn-create-session host username password))
+     (lambda (session)
+       (message "Bluesky: connected as %s" (plist-get session :handle))
+       (let ((buffer (get-buffer-create bluesky-timeline-buffer-name)))
+         (with-current-buffer buffer
+           (bluesky-mode))
+         (let ((root (vui-mount
+                      (vui-component 'bluesky-timeline
+                        :host host
+                        :handle (plist-get session :handle))
+                      bluesky-timeline-buffer-name)))
+           (with-current-buffer (vui-instance-buffer root)
+             (setq-local vui--root-instance root)
+             (setq-local bluesky--navigation-override-mode t)
+             (setq-local bluesky-current-post-overlay nil)
+             (setq-local bluesky-host host)
+             (setq-local bluesky-feed-session session)
+             (setq-local bluesky-feed-root root))
+           root)))
+     (lambda (err)
+       (message "Unable to connect to Bluesky: %s"
+                (bluesky--error-message err))
+       (futur-failed err)))))
+
+(provide 'bluesky)
 
 ;;; bluesky.el ends here
