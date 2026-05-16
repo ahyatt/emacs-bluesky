@@ -218,6 +218,13 @@ one quoted-post level are included."
          (with-current-buffer buffer
            (bluesky--highlight-selected item-id)))))))
 
+(defun bluesky--highlight-current ()
+  "Reapply the highlight for the current selected timeline item."
+  (when (and (bound-and-true-p bluesky-feed-root)
+             (buffer-live-p (current-buffer)))
+    (bluesky--schedule-highlight
+     (plist-get (vui-instance-state bluesky-feed-root) :selected-id))))
+
 (defun bluesky--move-selection (delta)
   "Move current timeline selection by DELTA."
   (let* ((items (bluesky--timeline-state :items))
@@ -338,8 +345,8 @@ one quoted-post level are included."
          :on-click (lambda ()
                      (vui-set-state :extend-requested (current-time))))))))
 
-(defun bluesky-connect (&optional username password host)
-  "Connect to a Bluesky server.
+(defun bluesky (&optional username password host)
+  "Connect to a Bluesky server and render the user's feed.
 
 USERNAME is the username to connect with.  It should not include the @
 prefix.  This can be nil, and if so, the user will be found via

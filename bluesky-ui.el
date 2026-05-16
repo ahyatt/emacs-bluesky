@@ -161,7 +161,9 @@ TIMESTR is a string such as 2024-11-29T22:31:30.465Z."
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (when (bound-and-true-p vui--root-instance)
-          (vui-rerender vui--root-instance))))))
+          (vui-rerender vui--root-instance)
+          (when (fboundp 'bluesky--highlight-current)
+            (bluesky--highlight-current)))))))
 
 (defun bluesky-ui--image-queue-running-p ()
   "Return non-nil if the image queue timer is active."
