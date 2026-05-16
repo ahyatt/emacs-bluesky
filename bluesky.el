@@ -289,6 +289,13 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
     (bluesky--schedule-highlight
      (plist-get (vui-instance-state bluesky-feed-root) :selected-id))))
 
+(defun bluesky--highlight-current-now ()
+  "Immediately reapply the highlight for the current selected timeline item."
+  (when (and (bound-and-true-p bluesky-feed-root)
+             (buffer-live-p (current-buffer)))
+    (bluesky--highlight-selected
+     (plist-get (vui-instance-state bluesky-feed-root) :selected-id))))
+
 (defun bluesky--move-selection (delta)
   "Move current timeline selection by DELTA."
   (let* ((items (bluesky--timeline-state :items))
