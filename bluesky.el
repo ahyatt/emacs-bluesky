@@ -33,6 +33,7 @@
 (require 'auth-source)
 (require 'cl-lib)
 (require 'futur)
+(require 'seq)
 (require 'subr-x)
 (require 'vui)
 
@@ -47,6 +48,9 @@
 
 (defconst bluesky-timeline-buffer-name "*Bluesky Timeline*"
   "The name of the Bluesky timeline buffer.")
+
+(defconst bluesky-thread-buffer-name "*Bluesky Thread*"
+  "The name of the Bluesky thread buffer.")
 
 (defface bluesky-heading
   '((t :inherit bold :height 1.2))
@@ -84,6 +88,7 @@
     (define-key map "j" #'bluesky-feed-next-post)
     (define-key map "k" #'bluesky-feed-previous-post)
     (define-key map "l" #'bluesky-feed-extend)
+    (define-key map (kbd "RET") #'bluesky-open-thread)
     map)
   "Keymap for Bluesky feed mode.")
 
@@ -163,10 +168,54 @@ one quoted-post level are included."
                           max-depth))
             (push child items)))))))
 
+(defun bluesky--flatten-thread (thread &optional depth)
+  "Return a flat, depth-first list of posts from THREAD.
+THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
+  (let ((depth (or depth 0))
+        (post (plist-get thread :post))
+        items)
+    (when post
+      (push (list :id (bluesky--post-id post) :post post :depth depth) items))
+    (dolist (reply (append (plist-get thread :replies) nil))
+      (dolist (child (bluesky--flatten-thread reply (1+ depth)))
+        (push child items)))
+    (nreverse items)))
+
+(defun bluesky--thread-ancestors (thread)
+  "Return THREAD's ancestor chain as root-first thread nodes."
+  (let (ancestors)
+    (while (plist-get thread :parent)
+      (setq thread (plist-get thread :parent))
+      (push thread ancestors))
+    ancestors))
+
+(defun bluesky--thread-items (thread)
+  "Return a flat list of renderable items for THREAD, including ancestors."
+  (let (items)
+    (dolist (ancestor (bluesky--thread-ancestors thread))
+      (let ((post (plist-get ancestor :post)))
+        (when post
+          (push (list :id (bluesky--post-id post) :post post :depth 0)
+                items))))
+    (append (nreverse items) (bluesky--flatten-thread thread))))
+
 (defun bluesky--timeline-state (key)
   "Return timeline component state KEY in the current buffer."
   (when bluesky-feed-root
     (plist-get (vui-instance-state bluesky-feed-root) key)))
+
+(defun bluesky--selected-item ()
+  "Return the selected timeline/thread item in the current buffer."
+  (let* ((items (bluesky--timeline-state :items))
+         (selected-id (bluesky--timeline-state :selected-id)))
+    (or (seq-find (lambda (item)
+                    (equal selected-id (plist-get item :id)))
+                  items)
+        (car items))))
+
+(defun bluesky--selected-post ()
+  "Return the selected post in the current buffer."
+  (plist-get (bluesky--selected-item) :post))
 
 (defun bluesky--set-timeline-state (key value)
   "Set timeline component state KEY to VALUE in the current buffer."
@@ -266,6 +315,34 @@ one quoted-post level are included."
   (interactive)
   (bluesky--move-selection -1))
 
+(defun bluesky-open-thread ()
+  "Open a thread view for the selected post."
+  (interactive)
+  (let* ((post (or (bluesky--selected-post)
+                   (user-error "No post selected")))
+         (uri (or (plist-get post :uri)
+                  (user-error "Selected post does not have a URI")))
+         (host bluesky-host)
+         (session bluesky-feed-session)
+         (handle (plist-get session :handle)))
+    (let ((buffer (get-buffer-create bluesky-thread-buffer-name)))
+      (with-current-buffer buffer
+        (bluesky-mode))
+      (let ((root (vui-mount
+                   (vui-component 'bluesky-thread
+                     :host host
+                     :handle handle
+                     :uri uri)
+                   bluesky-thread-buffer-name)))
+        (with-current-buffer (vui-instance-buffer root)
+          (setq-local vui--root-instance root)
+          (setq-local bluesky--navigation-override-mode t)
+          (setq-local bluesky-current-post-overlay nil)
+          (setq-local bluesky-host host)
+          (setq-local bluesky-feed-session session)
+          (setq-local bluesky-feed-root root))
+        (pop-to-buffer (vui-instance-buffer root))))))
+
 (vui-defcomponent bluesky-timeline (host handle)
   "Render a Bluesky timeline."
   :state ((posts nil)
@@ -344,6 +421,54 @@ one quoted-post level are included."
        (vui-button "Load more"
          :on-click (lambda ()
                      (vui-set-state :extend-requested (current-time))))))))
+
+(vui-defcomponent bluesky-thread (host handle uri)
+  "Render the thread containing URI."
+  :state ((thread nil)
+          (loading nil)
+          (error nil)
+          (items nil)
+          (selected-id nil))
+  :render
+  (progn
+    (let ((current-items (and thread (bluesky--thread-items thread))))
+      (vui-use-effect (thread selected-id)
+        (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
+          (vui-batch
+           (vui-set-state :items current-items)
+           (when (and ids (not (member selected-id ids)))
+             (vui-set-state :selected-id (car ids)))))
+        nil))
+    (vui-use-effect (selected-id items)
+      (bluesky--schedule-highlight selected-id)
+      nil)
+    (vui-use-effect (host handle uri)
+      (vui-batch
+       (vui-set-state :loading t)
+       (vui-set-state :error nil))
+      (bluesky--future-set-state
+       (bluesky-conn-get-post-thread host handle uri 10 20)
+       :thread
+       (lambda (resp) (plist-get resp :thread))
+       :error)
+      nil)
+    (vui-vstack
+     (vui-text "Thread" :face 'bluesky-heading)
+     (when error
+       (vui-text (bluesky--error-message error) :face 'bluesky-error))
+     (when loading
+       (vui-text "Loading..." :face 'bluesky-muted))
+     (if items
+         (vui-list items
+                   (lambda (item)
+                     (bluesky-ui-post host
+                                      (plist-get item :post)
+                                      (plist-get item :id)
+                                      (plist-get item :depth)))
+                   (lambda (item) (plist-get item :id))
+                   :spacing 1)
+       (unless loading
+         (vui-text "No thread posts loaded." :face 'bluesky-muted))))))
 
 (defun bluesky (&optional username password host)
   "Connect to a Bluesky server and render the user's feed.

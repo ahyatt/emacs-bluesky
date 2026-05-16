@@ -206,6 +206,15 @@ to return."
   (bluesky-conn-call-authed host handle 'get "app.bsky.feed.getTimeline"
                             :cursor cursor :limit limit))
 
+(defun bluesky-conn-get-post-thread (host handle uri &optional depth parent-height)
+  "Get the post thread for URI using HANDLE at HOST.
+DEPTH controls how many descendant levels to fetch, and PARENT-HEIGHT controls
+how many ancestor levels to fetch."
+  (bluesky-conn-call-authed host handle 'get "app.bsky.feed.getPostThread"
+                            :uri uri
+                            :depth depth
+                            :parentHeight parent-height))
+
 (defvar bluesky-conn-cache (make-hash-table :test 'equal)
   "A cache of Bluesky API responses, keyed by URLs.
 Anything in here is assumed to be cacheable indefinitely.")
