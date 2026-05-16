@@ -85,6 +85,10 @@ Images are loaded asynchronously through `bluesky-ui--image-queue'."
   '((t :inherit default))
   "Face for external website descriptions.")
 
+(defface bluesky-media
+  '((t :inherit font-lock-doc-face))
+  "Face for media metadata.")
+
 (defface bluesky-image-placeholder
   '((t :inherit shadow))
   "Face for image placeholders.")
@@ -356,22 +360,55 @@ AUTHOR-DID is the DID of the post author."
                      :face 'bluesky-external-description
                      'bluesky external)))
 
+(defun bluesky-ui--aspect-ratio-text (aspect-ratio)
+  "Return a readable string for ASPECT-RATIO."
+  (when aspect-ratio
+    (let ((width (plist-get aspect-ratio :width))
+          (height (plist-get aspect-ratio :height)))
+      (when (and width height)
+        (format "%sx%s" width height)))))
+
+(defun bluesky-ui-video (video)
+  "Return a VUI node for VIDEO embed view."
+  (let ((thumbnail (plist-get video :thumbnail))
+        (presentation (plist-get video :presentation))
+        (aspect (bluesky-ui--aspect-ratio-text
+                 (plist-get video :aspectRatio))))
+    (bluesky-ui--fragment
+     (when thumbnail
+       (bluesky-ui--async-image-node thumbnail thumbnail
+                                     :max-width bluesky-image-max-width))
+     (vui-newline)
+     (bluesky-ui--text
+      (string-join (delq nil (list "[video]"
+                                    presentation
+                                    aspect))
+                   " ")
+      :face 'bluesky-media
+      'bluesky video))))
+
 (defun bluesky-ui-embed (host embed author-did)
   "Return VUI nodes for EMBED from HOST.
 AUTHOR-DID is the DID of the author of the post."
   (when embed
-    (bluesky-ui--fragment
-     (mapcar
-      (lambda (image)
-        (when-let* ((image-url
-                     (or (plist-get image :thumb)
-                         (bluesky-ui--image-url-for-reference
-                          host (plist-get image :image) author-did))))
-          (bluesky-ui--async-image-node image-url image-url
-                                        :max-width bluesky-image-max-width)))
-      (append (plist-get embed :images) nil))
-     (when-let* ((external (plist-get embed :external)))
-       (bluesky-ui-external host external author-did)))))
+    (let ((type (plist-get embed :$type)))
+      (bluesky-ui--fragment
+       (when (or (equal type "app.bsky.embed.images#view")
+                 (equal type "app.bsky.embed.images"))
+         (mapcar
+          (lambda (image)
+            (when-let* ((image-url
+                         (or (plist-get image :thumb)
+                             (bluesky-ui--image-url-for-reference
+                              host (plist-get image :image) author-did))))
+              (bluesky-ui--async-image-node image-url image-url
+                                            :max-width bluesky-image-max-width)))
+          (append (plist-get embed :images) nil)))
+       (when-let* ((external (plist-get embed :external)))
+         (bluesky-ui-external host external author-did))
+       (when (or (equal type "app.bsky.embed.video#view")
+                 (equal type "app.bsky.embed.video"))
+         (bluesky-ui-video embed))))))
 
 (defun bluesky-ui-record (host record author-did)
   "Return a VUI node for RECORD on HOST."

@@ -31,6 +31,7 @@
 (require 'bluesky-conn)
 (require 'bluesky-ui)
 (require 'auth-source)
+(require 'browse-url)
 (require 'cl-lib)
 (require 'futur)
 (require 'seq)
@@ -75,6 +76,7 @@
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "j") #'bluesky-feed-next-post)
     (define-key map (kbd "k") #'bluesky-feed-previous-post)
+    (define-key map (kbd "o") #'bluesky-open-current)
     map)
   "High-precedence keymap for Bluesky navigation.")
 
@@ -88,6 +90,7 @@
     (define-key map "j" #'bluesky-feed-next-post)
     (define-key map "k" #'bluesky-feed-previous-post)
     (define-key map "l" #'bluesky-feed-extend)
+    (define-key map "o" #'bluesky-open-current)
     (define-key map (kbd "RET") #'bluesky-open-thread)
     map)
   "Keymap for Bluesky feed mode.")
@@ -314,6 +317,59 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
   "Move to the previous post in the timeline."
   (interactive)
   (bluesky--move-selection -1))
+
+(defun bluesky--facet-open-targets (record)
+  "Return openable link targets from RECORD facets."
+  (let (targets)
+    (dolist (facet (append (plist-get record :facets) nil))
+      (dolist (feature (append (plist-get facet :features) nil))
+        (when (equal (plist-get feature :$type) "app.bsky.richtext.facet#link")
+          (when-let* ((uri (plist-get feature :uri)))
+            (push (cons uri uri) targets)))))
+    (nreverse targets)))
+
+(defun bluesky--embed-open-targets (embed)
+  "Return openable link and media targets from EMBED."
+  (let (targets)
+    (when embed
+      (when-let* ((external (plist-get embed :external))
+                  (uri (plist-get external :uri)))
+        (push (cons (format "External: %s" uri) uri) targets))
+      (dolist (image (append (plist-get embed :images) nil))
+        (when-let* ((url (or (plist-get image :fullsize)
+                             (plist-get image :thumb))))
+          (push (cons (format "Image: %s" url) url) targets)))
+      (when-let* ((playlist (plist-get embed :playlist)))
+        (push (cons (format "Video playlist: %s" playlist) playlist) targets))
+      (when-let* ((thumbnail (plist-get embed :thumbnail)))
+        (push (cons (format "Video thumbnail: %s" thumbnail) thumbnail) targets))
+      (when-let* ((media (plist-get embed :media)))
+        (setq targets (append (bluesky--embed-open-targets media) targets))))
+    (nreverse targets)))
+
+(defun bluesky--post-open-targets (post)
+  "Return openable targets from POST."
+  (let* ((record (plist-get post :record))
+         (targets (append (bluesky--facet-open-targets record)
+                          (bluesky--embed-open-targets (plist-get post :embed))
+                          (bluesky--embed-open-targets (plist-get record :embed)))))
+    (seq-uniq targets (lambda (a b) (equal (cdr a) (cdr b))))))
+
+(defun bluesky-open-current ()
+  "Open a link or media URL from the selected post."
+  (interactive)
+  (let* ((post (or (bluesky--selected-post)
+                   (user-error "No post selected")))
+         (targets (bluesky--post-open-targets post)))
+    (unless targets
+      (user-error "Selected post has no links or media to open"))
+    (let* ((target (if (= (length targets) 1)
+                       (car targets)
+                     (let* ((choices (mapcar #'car targets))
+                            (choice (completing-read "Open: " choices nil t)))
+                       (assoc choice targets))))
+           (url (cdr target)))
+      (browse-url url))))
 
 (defun bluesky-open-thread ()
   "Open a thread view for the selected post."
