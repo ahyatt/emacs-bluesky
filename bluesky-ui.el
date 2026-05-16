@@ -1,6 +1,6 @@
 ;;; bluesky-ui.el --- Bluesky UI functions -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2024  Andrew Hyatt <ahyatt@gmail.com>
+;; Copyright (c) 2024, 2026  Andrew Hyatt <ahyatt@gmail.com>
 
 ;; Author: Andrew Hyatt <ahyatt@gmail.com>
 ;; Homepage: https://github.com/ahyatt/emacs-bluesky

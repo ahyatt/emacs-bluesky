@@ -1,6 +1,6 @@
 ;;; bluesky.el, a Bluesky client for Emacs -*- lexical-binding: t -*-
 
-;; Copyright (c) 2024  Andrew Hyatt <ahyatt@gmail.com>
+;; Copyright (c) 2024, 2026  Andrew Hyatt <ahyatt@gmail.com>
 
 ;; Author: Andrew Hyatt <ahyatt@gmail.com>
 ;; Homepage: https://github.com/ahyatt/ekg
@@ -112,13 +112,13 @@
    future
    (vui-async-callback (value)
      (vui-batch
-       (vui-set-state state-key (funcall value-fn value))
-       (vui-set-state :loading nil)
-       (vui-set-state :error nil)))
+      (vui-set-state state-key (funcall value-fn value))
+      (vui-set-state :loading nil)
+      (vui-set-state :error nil)))
    (vui-async-callback (err)
      (vui-batch
-       (vui-set-state :loading nil)
-       (vui-set-state error-key err)))))
+      (vui-set-state :loading nil)
+      (vui-set-state error-key err)))))
 
 (defun bluesky--error-message (err)
   "Return a readable error string for ERR."
@@ -275,23 +275,23 @@ one quoted-post level are included."
       (vui-use-effect (posts selected-id)
         (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
           (vui-batch
-            (vui-set-state :items current-items)
-            (when (and ids (not (member selected-id ids)))
-              (vui-set-state :selected-id (car ids)))))
+           (vui-set-state :items current-items)
+           (when (and ids (not (member selected-id ids)))
+             (vui-set-state :selected-id (car ids)))))
         nil))
     (vui-use-effect (selected-id items)
       (bluesky--schedule-highlight selected-id)
       nil)
     (vui-use-effect (host handle refresh-requested)
       (vui-batch
-        (vui-set-state :loading t)
-        (vui-set-state :error nil))
+       (vui-set-state :loading t)
+       (vui-set-state :error nil))
       (bluesky--future-set-state
        (bluesky-conn-get-timeline host handle nil 50)
        :posts
        (lambda (feed)
          (vui-batch
-           (vui-set-state :cursor (plist-get feed :cursor)))
+          (vui-set-state :cursor (plist-get feed :cursor)))
          (mapcar (lambda (entry) (plist-get entry :post))
                  (append (plist-get feed :feed) nil)))
        :error)
@@ -299,14 +299,14 @@ one quoted-post level are included."
     (vui-use-effect (extend-requested)
       (when (and extend-requested cursor (not loading))
         (vui-batch
-          (vui-set-state :loading t)
-          (vui-set-state :error nil))
+         (vui-set-state :loading t)
+         (vui-set-state :error nil))
         (bluesky--future-set-state
          (bluesky-conn-get-timeline host handle cursor 50)
          :posts
          (lambda (feed)
            (vui-batch
-             (vui-set-state :cursor (plist-get feed :cursor)))
+            (vui-set-state :cursor (plist-get feed :cursor)))
            (append posts
                    (mapcar (lambda (entry) (plist-get entry :post))
                            (append (plist-get feed :feed) nil))))
