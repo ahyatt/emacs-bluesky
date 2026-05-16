@@ -26,6 +26,7 @@
 
 (require 'bluesky-conn)
 (require 'plz)
+(require 'seq)
 (require 'subr-x)
 (require 'url-util)
 (require 'vui)
@@ -60,6 +61,10 @@ Images are loaded asynchronously through `bluesky-ui--image-queue'."
 (defface bluesky-author-attribute
   '((t :inherit font-lock-comment-face))
   "Face for author attributes in Bluesky.")
+
+(defface bluesky-label
+  '((t :inherit warning))
+  "Face for labels and content warnings in Bluesky.")
 
 (defface bluesky-time
   '((t :inherit font-lock-normal-face))
@@ -383,6 +388,39 @@ AUTHOR-DID is the DID of the post author."
     (when states
       (concat " - " (string-join states ", ")))))
 
+(defun bluesky-ui--viewer-flags (viewer)
+  "Return readable moderation/action flags from VIEWER."
+  (delq nil
+        (list (when (bluesky-ui--json-truthy-p
+                     (plist-get viewer :threadMuted))
+                "thread muted")
+              (when (bluesky-ui--json-truthy-p
+                     (plist-get viewer :replyDisabled))
+                "replies disabled")
+              (when (bluesky-ui--json-truthy-p
+                     (plist-get viewer :embeddingDisabled))
+                "embedding disabled"))))
+
+(defun bluesky-ui--label-text (label)
+  "Return readable text for LABEL."
+  (or (plist-get label :val)
+      (plist-get label :uri)
+      (plist-get label :cid)
+      (plist-get label :src)
+      "unknown"))
+
+(defun bluesky-ui-labels (post)
+  "Return a VUI node for POST labels and moderation flags."
+  (let* ((labels (seq-filter #'identity (append (plist-get post :labels) nil)))
+         (label-texts (mapcar #'bluesky-ui--label-text labels))
+         (flags (bluesky-ui--viewer-flags (plist-get post :viewer)))
+         (all (append label-texts flags)))
+    (when all
+      (bluesky-ui--fragment
+       (bluesky-ui--text (format "[%s]" (string-join all ", "))
+                         :face 'bluesky-label)
+       (vui-newline)))))
+
 (defun bluesky-ui-video (video)
   "Return a VUI node for VIDEO embed view."
   (let ((thumbnail (plist-get video :thumbnail))
@@ -484,6 +522,7 @@ AUTHOR-DID is the DID of the author of the post."
         (vui-space)
         (bluesky-ui--text (bluesky-ui-relative-time (plist-get record :createdAt))
                           :face 'bluesky-time))
+       (bluesky-ui-labels post)
        (bluesky-ui-record host record author-did depth (plist-get post :embed))
        (bluesky-ui--text (format "%d comments - %d repost - %d quotes - %d likes%s"
                                  (or (plist-get post :replyCount) 0)
