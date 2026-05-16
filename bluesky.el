@@ -73,15 +73,7 @@
   "Non-nil when Bluesky navigation keys should override minor modes.")
 
 (defvar bluesky--navigation-override-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "j") #'bluesky-feed-next-post)
-    (define-key map (kbd "k") #'bluesky-feed-previous-post)
-    (define-key map (kbd "o") #'bluesky-open-current)
-    (define-key map (kbd "L") #'bluesky-toggle-like)
-    (define-key map (kbd "R") #'bluesky-toggle-repost)
-    (define-key map (kbd "b") #'bluesky-toggle-bookmark)
-    (define-key map (kbd "r") #'bluesky-reply)
-    map)
+  (make-sparse-keymap)
   "High-precedence keymap for Bluesky navigation.")
 
 (add-to-list 'emulation-mode-map-alists
@@ -89,19 +81,27 @@
                 . ,bluesky--navigation-override-map)))
 
 (defvar bluesky-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map "g" #'bluesky-feed-refresh)
-    (define-key map "j" #'bluesky-feed-next-post)
-    (define-key map "k" #'bluesky-feed-previous-post)
-    (define-key map "l" #'bluesky-feed-extend)
-    (define-key map "o" #'bluesky-open-current)
-    (define-key map "L" #'bluesky-toggle-like)
-    (define-key map "R" #'bluesky-toggle-repost)
-    (define-key map "b" #'bluesky-toggle-bookmark)
-    (define-key map "r" #'bluesky-reply)
-    (define-key map (kbd "RET") #'bluesky-open-thread)
-    map)
+  (make-sparse-keymap)
   "Keymap for Bluesky feed mode.")
+
+(define-key bluesky--navigation-override-map (kbd "j") #'bluesky-feed-next-post)
+(define-key bluesky--navigation-override-map (kbd "k") #'bluesky-feed-previous-post)
+(define-key bluesky--navigation-override-map (kbd "o") #'bluesky-open-current)
+(define-key bluesky--navigation-override-map (kbd "L") #'bluesky-toggle-like)
+(define-key bluesky--navigation-override-map (kbd "R") #'bluesky-toggle-repost)
+(define-key bluesky--navigation-override-map (kbd "b") #'bluesky-toggle-bookmark)
+(define-key bluesky--navigation-override-map (kbd "r") #'bluesky-reply)
+
+(define-key bluesky-mode-map (kbd "g") #'bluesky-feed-refresh)
+(define-key bluesky-mode-map (kbd "j") #'bluesky-feed-next-post)
+(define-key bluesky-mode-map (kbd "k") #'bluesky-feed-previous-post)
+(define-key bluesky-mode-map (kbd "l") #'bluesky-feed-extend)
+(define-key bluesky-mode-map (kbd "o") #'bluesky-open-current)
+(define-key bluesky-mode-map (kbd "L") #'bluesky-toggle-like)
+(define-key bluesky-mode-map (kbd "R") #'bluesky-toggle-repost)
+(define-key bluesky-mode-map (kbd "b") #'bluesky-toggle-bookmark)
+(define-key bluesky-mode-map (kbd "r") #'bluesky-reply)
+(define-key bluesky-mode-map (kbd "RET") #'bluesky-open-thread)
 
 (define-derived-mode bluesky-mode vui-mode "Bluesky"
   "Major mode for Bluesky buffers consisting of lists of posts."
