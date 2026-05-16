@@ -29,6 +29,7 @@
 ;; everything important as clearly as possible.
 
 (require 'bluesky-conn)
+(require 'bluesky-post)
 (require 'bluesky-ui)
 (require 'auth-source)
 (require 'browse-url)
@@ -86,6 +87,7 @@
 
 (define-key bluesky--navigation-override-map (kbd "j") #'bluesky-feed-next-post)
 (define-key bluesky--navigation-override-map (kbd "k") #'bluesky-feed-previous-post)
+(define-key bluesky--navigation-override-map (kbd "n") #'bluesky-compose-post)
 (define-key bluesky--navigation-override-map (kbd "o") #'bluesky-open-current)
 (define-key bluesky--navigation-override-map (kbd "L") #'bluesky-toggle-like)
 (define-key bluesky--navigation-override-map (kbd "R") #'bluesky-toggle-repost)
@@ -96,6 +98,7 @@
 (define-key bluesky-mode-map (kbd "j") #'bluesky-feed-next-post)
 (define-key bluesky-mode-map (kbd "k") #'bluesky-feed-previous-post)
 (define-key bluesky-mode-map (kbd "l") #'bluesky-feed-extend)
+(define-key bluesky-mode-map (kbd "n") #'bluesky-compose-post)
 (define-key bluesky-mode-map (kbd "o") #'bluesky-open-current)
 (define-key bluesky-mode-map (kbd "L") #'bluesky-toggle-like)
 (define-key bluesky-mode-map (kbd "R") #'bluesky-toggle-repost)
@@ -447,22 +450,26 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
                                      (plist-get bluesky-feed-session :handle)
                                      post)))))
 
-(defun bluesky-reply (text)
-  "Reply to the selected post with TEXT."
-  (interactive
-   (list (read-string "Reply: ")))
-  (unless (string-empty-p text)
-    (let* ((post (or (bluesky--selected-post)
-                     (user-error "No post selected")))
-           (viewer (plist-get post :viewer)))
-      (when (bluesky--json-truthy-p (plist-get viewer :replyDisabled))
-        (user-error "Replies are disabled for this post"))
-      (bluesky--run-post-action
-       "replied to post"
-       (bluesky-conn-create-reply bluesky-host
-                                  (plist-get bluesky-feed-session :handle)
-                                  post
-                                  text)))))
+(defun bluesky-compose-post ()
+  "Open a buffer to compose a new Bluesky post."
+  (interactive)
+  (bluesky-post-compose
+   :host bluesky-host
+   :session bluesky-feed-session
+   :source-buffer (current-buffer)))
+
+(defun bluesky-reply ()
+  "Open a buffer to reply to the selected post."
+  (interactive)
+  (let ((post (or (bluesky--selected-post)
+                  (user-error "No post selected"))))
+    (when (bluesky-post-reply-disabled-p post)
+      (user-error "Replies are disabled for this post"))
+    (bluesky-post-compose
+     :host bluesky-host
+     :session bluesky-feed-session
+     :reply-to post
+     :source-buffer (current-buffer))))
 
 (defun bluesky-open-thread ()
   "Open a thread view for the selected post."

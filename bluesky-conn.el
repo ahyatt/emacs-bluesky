@@ -52,10 +52,30 @@ the Bluesky API.")
 
 (defun bluesky-conn--clean-args (args)
   "Return ARGS with nil-valued plist entries removed."
-  (flatten-list (funcall #'append
-                         (seq-filter (lambda (double)
-                                       (not (null (cadr double))))
-                                     (seq-partition args 2)))))
+  (let (cleaned)
+    (while args
+      (let ((key (pop args))
+            (value (pop args)))
+        (unless (null value)
+          (push key cleaned)
+          (push (bluesky-conn--clean-value value) cleaned))))
+    (nreverse cleaned)))
+
+(defun bluesky-conn--plist-p (value)
+  "Return non-nil when VALUE looks like a plist."
+  (and (consp value)
+       (keywordp (car value))))
+
+(defun bluesky-conn--clean-value (value)
+  "Return VALUE with nested nil-valued plist entries removed."
+  (cond
+   ((vectorp value)
+    (vconcat (mapcar #'bluesky-conn--clean-value (append value nil))))
+   ((bluesky-conn--plist-p value)
+    (bluesky-conn--clean-args value))
+   ((consp value)
+    (mapcar #'bluesky-conn--clean-value value))
+   (t value)))
 
 (defun bluesky-conn--api-error-json (error-object)
   "Return the JSON error payload in ERROR-OBJECT, if present."
@@ -183,14 +203,15 @@ session object in `bluesky-session' for future use, and also return it."
              result)
        result))))
 
-(defun bluesky-conn-create-post (host handle collection record)
+(defun bluesky-conn-create-post (host handle collection record &optional rkey)
   "Create a post in the Bluesky instance at HOST using HANDLE.
 COLLECTION is the collection to post to, and RECORD is the record, created by
-`bluesky-conn-record', to post."
+`bluesky-conn-record', to post.  RKEY, when non-nil, is the record key to use."
   (bluesky-conn-call-authed
    host handle 'post "com.atproto.repo.createRecord"
    :repo (plist-get (bluesky-conn-get-session host handle) :did)
    :collection collection
+   :rkey rkey
    :record record))
 
 (defun bluesky-conn-delete-record (host handle record-uri)
@@ -215,6 +236,10 @@ COLLECTION is the collection to post to, and RECORD is the record, created by
   "Return a strong ref subject for POST."
   (list :uri (plist-get post :uri)
         :cid (plist-get post :cid)))
+
+(defun bluesky-conn--record-rkey (record-uri)
+  "Return the rkey parsed from RECORD-URI."
+  (nth 2 (bluesky-conn--at-uri-parts record-uri)))
 
 (defun bluesky-conn-record (text langs facets &optional reply)
   "Return an app.bsky.feed.post record for TEXT.
@@ -250,6 +275,28 @@ LANGS and FACETS are optional post metadata.  REPLY is a reply ref plist."
      host handle "app.bsky.feed.post"
      (bluesky-conn-record text nil nil
                           (list :root root :parent parent)))))
+
+(defun bluesky-conn-create-threadgate (host handle post-uri allow)
+  "Create a threadgate for POST-URI using HANDLE at HOST.
+ALLOW is a vector of app.bsky.feed.threadgate rule records."
+  (bluesky-conn-create-post
+   host handle "app.bsky.feed.threadgate"
+   (list :$type "app.bsky.feed.threadgate"
+         :post post-uri
+         :allow allow
+         :createdAt (format-time-string "%Y-%m-%dT%H:%M:%SZ"))
+   (bluesky-conn--record-rkey post-uri)))
+
+(defun bluesky-conn-create-postgate (host handle post-uri embedding-rules)
+  "Create a postgate for POST-URI using HANDLE at HOST.
+EMBEDDING-RULES is a vector of app.bsky.feed.postgate rule records."
+  (bluesky-conn-create-post
+   host handle "app.bsky.feed.postgate"
+   (list :$type "app.bsky.feed.postgate"
+         :post post-uri
+         :embeddingRules embedding-rules
+         :createdAt (format-time-string "%Y-%m-%dT%H:%M:%SZ"))
+   (bluesky-conn--record-rkey post-uri)))
 
 (defun bluesky-conn-create-bookmark (host handle post)
   "Bookmark POST using HANDLE at HOST."
