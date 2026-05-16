@@ -151,33 +151,15 @@
       (plist-get post :cid)
       (secure-hash 'sha1 (prin1-to-string post))))
 
-(defun bluesky--quoted-post (post)
-  "Return POST's quoted post view, if present."
-  (let* ((embed (or (plist-get post :embed)
-                    (plist-get (plist-get post :record) :embed)))
-         (quoted (plist-get embed :record))
-         (value (plist-get quoted :value)))
-    (when (and quoted value (plist-get quoted :author))
-      (let ((quoted-post (copy-sequence quoted)))
-        (setq quoted-post (plist-put quoted-post :record value))
-        quoted-post))))
-
-(defun bluesky--flatten-posts (posts &optional depth max-depth)
-  "Return a depth-first flat list of navigable POSTS.
-DEPTH defaults to 0 and MAX-DEPTH defaults to 1, so top-level posts and
-one quoted-post level are included."
+(defun bluesky--flatten-posts (posts &optional depth)
+  "Return a flat list of navigable POSTS.
+Quoted records are rendered inline by `bluesky-ui-embed', so they are not
+included as separate timeline items."
   (let ((depth (or depth 0))
-        (max-depth (or max-depth 1))
         items)
     (dolist (post posts (nreverse items))
       (let ((id (bluesky--post-id post)))
-        (push (list :id id :post post :depth depth) items)
-        (when (< depth max-depth)
-          (dolist (child (bluesky--flatten-posts
-                          (delq nil (list (bluesky--quoted-post post)))
-                          (1+ depth)
-                          max-depth))
-            (push child items)))))))
+        (push (list :id id :post post :depth depth) items)))))
 
 (defun bluesky--flatten-thread (thread &optional depth)
   "Return a flat, depth-first list of posts from THREAD.
