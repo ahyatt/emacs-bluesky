@@ -455,6 +455,9 @@ AUTHOR-DID is the DID of the post author."
   "Return a VUI node for embedded RECORD-VIEW on HOST."
   (let ((type (plist-get record-view :$type)))
     (cond
+     ((and (equal type "app.bsky.embed.record#view")
+           (plist-get record-view :record))
+      (bluesky-ui-embedded-record host (plist-get record-view :record) depth))
      ((bluesky-ui--record-view-as-post record-view)
       (bluesky-ui-post host
                        (bluesky-ui--record-view-as-post record-view)
