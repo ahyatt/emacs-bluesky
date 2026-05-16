@@ -387,7 +387,38 @@ AUTHOR-DID is the DID of the post author."
       :face 'bluesky-media
       'bluesky video))))
 
-(defun bluesky-ui-embed (host embed author-did)
+(defun bluesky-ui--record-view-as-post (record-view)
+  "Return RECORD-VIEW as a post view plist, when possible."
+  (when (and record-view
+             (plist-get record-view :author)
+             (plist-get record-view :value))
+    (let ((post (copy-sequence record-view)))
+      (plist-put post :record (plist-get record-view :value)))))
+
+(defun bluesky-ui-embedded-record (host record-view depth)
+  "Return a VUI node for embedded RECORD-VIEW on HOST."
+  (let ((type (plist-get record-view :$type)))
+    (cond
+     ((bluesky-ui--record-view-as-post record-view)
+      (bluesky-ui-post host
+                       (bluesky-ui--record-view-as-post record-view)
+                       nil
+                       (1+ (or depth 0))))
+     ((equal type "app.bsky.embed.record#viewBlocked")
+      (bluesky-ui--text "[blocked quoted record]"
+                        :face 'bluesky-author-attribute))
+     ((equal type "app.bsky.embed.record#viewNotFound")
+      (bluesky-ui--text "[quoted record not found]"
+                        :face 'bluesky-author-attribute))
+     ((equal type "app.bsky.embed.record#viewDetached")
+      (bluesky-ui--text "[quoted record detached]"
+                        :face 'bluesky-author-attribute))
+     (record-view
+      (bluesky-ui--text (format "[unsupported quoted record: %s]"
+                                (or type "unknown"))
+                        :face 'bluesky-author-attribute)))))
+
+(defun bluesky-ui-embed (host embed author-did &optional depth)
   "Return VUI nodes for EMBED from HOST.
 AUTHOR-DID is the DID of the author of the post."
   (when embed
@@ -408,15 +439,20 @@ AUTHOR-DID is the DID of the author of the post."
          (bluesky-ui-external host external author-did))
        (when (or (equal type "app.bsky.embed.video#view")
                  (equal type "app.bsky.embed.video"))
-         (bluesky-ui-video embed))))))
+         (bluesky-ui-video embed))
+       (when-let* ((media (plist-get embed :media)))
+         (bluesky-ui-embed host media author-did depth))
+       (when-let* ((record (plist-get embed :record)))
+         (bluesky-ui-embedded-record host record depth))))))
 
-(defun bluesky-ui-record (host record author-did)
+(defun bluesky-ui-record (host record author-did &optional depth view-embed)
   "Return a VUI node for RECORD on HOST."
   (bluesky-ui--fragment
    (bluesky-ui-text-with-facets (or (plist-get record :text) "")
                                 (plist-get record :facets))
    (vui-newline)
-   (bluesky-ui-embed host (plist-get record :embed) author-did)))
+   (bluesky-ui-embed host (or view-embed (plist-get record :embed))
+                     author-did depth)))
 
 (defun bluesky-ui-post (host post &optional item-id depth)
   "Return a VUI node for POST from HOST."
@@ -433,7 +469,7 @@ AUTHOR-DID is the DID of the author of the post."
         (vui-space)
         (bluesky-ui--text (bluesky-ui-relative-time (plist-get record :createdAt))
                           :face 'bluesky-time))
-       (bluesky-ui-record host record author-did)
+       (bluesky-ui-record host record author-did depth (plist-get post :embed))
        (bluesky-ui--text (format "%d comments - %d repost - %d quotes - %d likes"
                                  (or (plist-get post :replyCount) 0)
                                  (or (plist-get post :repostCount) 0)
