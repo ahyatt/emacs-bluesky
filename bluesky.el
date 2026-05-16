@@ -77,6 +77,10 @@
     (define-key map (kbd "j") #'bluesky-feed-next-post)
     (define-key map (kbd "k") #'bluesky-feed-previous-post)
     (define-key map (kbd "o") #'bluesky-open-current)
+    (define-key map (kbd "L") #'bluesky-toggle-like)
+    (define-key map (kbd "R") #'bluesky-toggle-repost)
+    (define-key map (kbd "b") #'bluesky-toggle-bookmark)
+    (define-key map (kbd "r") #'bluesky-reply)
     map)
   "High-precedence keymap for Bluesky navigation.")
 
@@ -91,6 +95,10 @@
     (define-key map "k" #'bluesky-feed-previous-post)
     (define-key map "l" #'bluesky-feed-extend)
     (define-key map "o" #'bluesky-open-current)
+    (define-key map "L" #'bluesky-toggle-like)
+    (define-key map "R" #'bluesky-toggle-repost)
+    (define-key map "b" #'bluesky-toggle-bookmark)
+    (define-key map "r" #'bluesky-reply)
     (define-key map (kbd "RET") #'bluesky-open-thread)
     map)
   "Keymap for Bluesky feed mode.")
@@ -219,6 +227,10 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
 (defun bluesky--selected-post ()
   "Return the selected post in the current buffer."
   (plist-get (bluesky--selected-item) :post))
+
+(defun bluesky--json-truthy-p (value)
+  "Return non-nil when VALUE represents true in Bluesky JSON data."
+  (and value (not (eq value :json-false))))
 
 (defun bluesky--set-timeline-state (key value)
   "Set timeline component state KEY to VALUE in the current buffer."
@@ -371,6 +383,98 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
            (url (cdr target)))
       (browse-url url))))
 
+(defun bluesky--request-refresh ()
+  "Request a refresh for the active Bluesky VUI component."
+  (if bluesky-feed-root
+      (let ((vui--root-instance bluesky-feed-root)
+            (vui--current-instance bluesky-feed-root))
+        (vui-set-state :refresh-requested (current-time)))
+    (user-error "No Bluesky feed is active in this buffer")))
+
+(defun bluesky--run-post-action (description future)
+  "Run FUTURE for a post action described by DESCRIPTION."
+  (let ((buffer (current-buffer)))
+    (futur-bind
+     future
+     (lambda (_value)
+       (message "Bluesky: %s" description)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (bluesky--request-refresh))))
+     (lambda (err)
+       (message "Bluesky: %s failed: %s"
+                description
+                (bluesky--error-message err))
+       (futur-failed err)))))
+
+(defun bluesky-toggle-like ()
+  "Like or unlike the selected post."
+  (interactive)
+  (let* ((post (or (bluesky--selected-post)
+                   (user-error "No post selected")))
+         (viewer (plist-get post :viewer))
+         (like-uri (plist-get viewer :like)))
+    (bluesky--run-post-action
+     (if like-uri "unliked post" "liked post")
+     (if like-uri
+         (bluesky-conn-delete-record bluesky-host
+                                     (plist-get bluesky-feed-session :handle)
+                                     like-uri)
+       (bluesky-conn-create-like bluesky-host
+                                 (plist-get bluesky-feed-session :handle)
+                                 post)))))
+
+(defun bluesky-toggle-repost ()
+  "Repost or unrepost the selected post."
+  (interactive)
+  (let* ((post (or (bluesky--selected-post)
+                   (user-error "No post selected")))
+         (viewer (plist-get post :viewer))
+         (repost-uri (plist-get viewer :repost)))
+    (bluesky--run-post-action
+     (if repost-uri "removed repost" "reposted post")
+     (if repost-uri
+         (bluesky-conn-delete-record bluesky-host
+                                     (plist-get bluesky-feed-session :handle)
+                                     repost-uri)
+       (bluesky-conn-create-repost bluesky-host
+                                   (plist-get bluesky-feed-session :handle)
+                                   post)))))
+
+(defun bluesky-toggle-bookmark ()
+  "Bookmark or unbookmark the selected post."
+  (interactive)
+  (let* ((post (or (bluesky--selected-post)
+                   (user-error "No post selected")))
+         (viewer (plist-get post :viewer))
+         (bookmarked (bluesky--json-truthy-p (plist-get viewer :bookmarked))))
+    (bluesky--run-post-action
+     (if bookmarked "removed bookmark" "bookmarked post")
+     (if bookmarked
+         (bluesky-conn-delete-bookmark bluesky-host
+                                       (plist-get bluesky-feed-session :handle)
+                                       post)
+       (bluesky-conn-create-bookmark bluesky-host
+                                     (plist-get bluesky-feed-session :handle)
+                                     post)))))
+
+(defun bluesky-reply (text)
+  "Reply to the selected post with TEXT."
+  (interactive
+   (list (read-string "Reply: ")))
+  (unless (string-empty-p text)
+    (let* ((post (or (bluesky--selected-post)
+                     (user-error "No post selected")))
+           (viewer (plist-get post :viewer)))
+      (when (bluesky--json-truthy-p (plist-get viewer :replyDisabled))
+        (user-error "Replies are disabled for this post"))
+      (bluesky--run-post-action
+       "replied to post"
+       (bluesky-conn-create-reply bluesky-host
+                                  (plist-get bluesky-feed-session :handle)
+                                  post
+                                  text)))))
+
 (defun bluesky-open-thread ()
   "Open a thread view for the selected post."
   (interactive)
@@ -484,7 +588,8 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
           (loading nil)
           (error nil)
           (items nil)
-          (selected-id nil))
+          (selected-id nil)
+          (refresh-requested nil))
   :render
   (progn
     (let ((current-items (and thread (bluesky--thread-items thread))))
@@ -498,7 +603,7 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
     (vui-use-effect (selected-id items)
       (bluesky--schedule-highlight selected-id)
       nil)
-    (vui-use-effect (host handle uri)
+    (vui-use-effect (host handle uri refresh-requested)
       (vui-batch
        (vui-set-state :loading t)
        (vui-set-state :error nil))

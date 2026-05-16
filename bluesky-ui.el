@@ -368,6 +368,21 @@ AUTHOR-DID is the DID of the post author."
       (when (and width height)
         (format "%sx%s" width height)))))
 
+(defun bluesky-ui--json-truthy-p (value)
+  "Return non-nil when VALUE represents true in Bluesky JSON data."
+  (and value (not (eq value :json-false))))
+
+(defun bluesky-ui--viewer-state-text (viewer)
+  "Return readable action state text for VIEWER."
+  (let ((states (delq nil
+                      (list (when (plist-get viewer :like) "liked")
+                            (when (plist-get viewer :repost) "reposted")
+                            (when (bluesky-ui--json-truthy-p
+                                   (plist-get viewer :bookmarked))
+                              "bookmarked")))))
+    (when states
+      (concat " - " (string-join states ", ")))))
+
 (defun bluesky-ui-video (video)
   "Return a VUI node for VIDEO embed view."
   (let ((thumbnail (plist-get video :thumbnail))
@@ -470,11 +485,14 @@ AUTHOR-DID is the DID of the author of the post."
         (bluesky-ui--text (bluesky-ui-relative-time (plist-get record :createdAt))
                           :face 'bluesky-time))
        (bluesky-ui-record host record author-did depth (plist-get post :embed))
-       (bluesky-ui--text (format "%d comments - %d repost - %d quotes - %d likes"
+       (bluesky-ui--text (format "%d comments - %d repost - %d quotes - %d likes%s"
                                  (or (plist-get post :replyCount) 0)
                                  (or (plist-get post :repostCount) 0)
                                  (or (plist-get post :quoteCount) 0)
-                                 (or (plist-get post :likeCount) 0)))
+                                 (or (plist-get post :likeCount) 0)
+                                 (or (bluesky-ui--viewer-state-text
+                                      (plist-get post :viewer))
+                                     "")))
        (bluesky-ui--text "")))))
 
 (provide 'bluesky-ui)

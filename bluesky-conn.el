@@ -25,6 +25,7 @@
 ;; use plists and arrays.
 
 (require 'json)
+(require 'cl-lib)
 (require 'futur)
 (require 'plz)
 (require 'seq)
@@ -192,10 +193,74 @@ COLLECTION is the collection to post to, and RECORD is the record, created by
    :collection collection
    :record record))
 
-(defun bluesky-conn-record (text langs facets)
+(defun bluesky-conn-delete-record (host handle record-uri)
+  "Delete RECORD-URI using HANDLE at HOST."
+  (pcase-let ((`(,repo ,collection ,rkey)
+               (bluesky-conn--at-uri-parts record-uri)))
+    (bluesky-conn-call-authed
+     host handle 'post "com.atproto.repo.deleteRecord"
+     :repo repo
+     :collection collection
+     :rkey rkey)))
+
+(defun bluesky-conn--at-uri-parts (uri)
+  "Return (REPO COLLECTION RKEY) parsed from at:// URI."
+  (unless (string-match "\\`at://\\([^/]+\\)/\\([^/]+\\)/\\([^/]+\\)\\'" uri)
+    (error "Unsupported AT URI: %s" uri))
+  (list (match-string 1 uri)
+        (match-string 2 uri)
+        (match-string 3 uri)))
+
+(defun bluesky-conn--subject (post)
+  "Return a strong ref subject for POST."
+  (list :uri (plist-get post :uri)
+        :cid (plist-get post :cid)))
+
+(defun bluesky-conn-record (text langs facets &optional reply)
+  "Return an app.bsky.feed.post record for TEXT.
+LANGS and FACETS are optional post metadata.  REPLY is a reply ref plist."
   (append `(:text ,text :createdAt ,(format-time-string "%Y-%m-%dT%H:%M:%SZ"))
           (when langs `(:langs ,langs))
-          (when facets `(:facets ,facets))))
+          (when facets `(:facets ,facets))
+          (when reply `(:reply ,reply))))
+
+(defun bluesky-conn-create-like (host handle post)
+  "Like POST using HANDLE at HOST."
+  (bluesky-conn-create-post
+   host handle "app.bsky.feed.like"
+   (list :$type "app.bsky.feed.like"
+         :subject (bluesky-conn--subject post)
+         :createdAt (format-time-string "%Y-%m-%dT%H:%M:%SZ"))))
+
+(defun bluesky-conn-create-repost (host handle post)
+  "Repost POST using HANDLE at HOST."
+  (bluesky-conn-create-post
+   host handle "app.bsky.feed.repost"
+   (list :$type "app.bsky.feed.repost"
+         :subject (bluesky-conn--subject post)
+         :createdAt (format-time-string "%Y-%m-%dT%H:%M:%SZ"))))
+
+(defun bluesky-conn-create-reply (host handle post text)
+  "Reply to POST with TEXT using HANDLE at HOST."
+  (let* ((record (plist-get post :record))
+         (existing-reply (plist-get record :reply))
+         (parent (bluesky-conn--subject post))
+         (root (or (plist-get existing-reply :root) parent)))
+    (bluesky-conn-create-post
+     host handle "app.bsky.feed.post"
+     (bluesky-conn-record text nil nil
+                          (list :root root :parent parent)))))
+
+(defun bluesky-conn-create-bookmark (host handle post)
+  "Bookmark POST using HANDLE at HOST."
+  (bluesky-conn-call-authed host handle 'post "app.bsky.bookmark.createBookmark"
+                            :uri (plist-get post :uri)
+                            :cid (plist-get post :cid)))
+
+(defun bluesky-conn-delete-bookmark (host handle post)
+  "Delete the bookmark for POST using HANDLE at HOST."
+  (bluesky-conn-call-authed host handle 'post "app.bsky.bookmark.deleteBookmark"
+                            :uri (plist-get post :uri)))
 
 (defun bluesky-conn-get-timeline (host handle &optional cursor limit)
   "Get the timeline for the user HANDLE at HOST.
