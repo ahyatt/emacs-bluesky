@@ -97,7 +97,7 @@
 (define-key bluesky--navigation-override-map (kbd "R") #'bluesky-toggle-repost)
 (define-key bluesky--navigation-override-map (kbd "b") #'bluesky-toggle-bookmark)
 (define-key bluesky--navigation-override-map (kbd "r") #'bluesky-reply)
-(define-key bluesky--navigation-override-map (kbd "RET") #'bluesky-open-thread)
+(define-key bluesky--navigation-override-map (kbd "RET") nil)
 
 (define-key bluesky-mode-map (kbd "g") #'bluesky-feed-refresh)
 (define-key bluesky-mode-map (kbd "j") #'bluesky-feed-next-post)
@@ -109,7 +109,7 @@
 (define-key bluesky-mode-map (kbd "R") #'bluesky-toggle-repost)
 (define-key bluesky-mode-map (kbd "b") #'bluesky-toggle-bookmark)
 (define-key bluesky-mode-map (kbd "r") #'bluesky-reply)
-(define-key bluesky-mode-map (kbd "RET") #'bluesky-open-thread)
+(define-key bluesky-mode-map (kbd "RET") #'bluesky-activate-or-open-thread)
 
 (define-derived-mode bluesky-mode vui-mode "Bluesky"
   "Major mode for Bluesky buffers consisting of lists of posts."
@@ -562,6 +562,13 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
           (setq-local bluesky-feed-session session)
           (setq-local bluesky-feed-root root))
         (pop-to-buffer (vui-instance-buffer root))))))
+
+(defun bluesky-activate-or-open-thread ()
+  "Activate the widget at point, or open the selected post thread."
+  (interactive)
+  (if (widget-at)
+      (widget-button-press (point))
+    (bluesky-open-thread)))
 
 (vui-defcomponent bluesky-timeline (host handle)
   "Render a Bluesky timeline."
