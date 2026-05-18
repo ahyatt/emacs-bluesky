@@ -54,6 +54,9 @@
 (defconst bluesky-thread-buffer-name "*Bluesky Thread*"
   "The name of the Bluesky thread buffer.")
 
+(defconst bluesky-thread-buffer-snippet-width 48
+  "Maximum width of the snippet in Bluesky thread buffer names.")
+
 (defface bluesky-heading
   '((t :inherit bold :height 1.2))
   "Face for Bluesky buffer headings.")
@@ -270,6 +273,36 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
 (defun bluesky--json-truthy-p (value)
   "Return non-nil when VALUE represents true in Bluesky JSON data."
   (and value (not (eq value :json-false))))
+
+(defun bluesky--clean-buffer-name-snippet (text)
+  "Return TEXT normalized for use in a Bluesky buffer name."
+  (let ((snippet (string-trim
+                  (replace-regexp-in-string "[ \t\n\r]+" " " (or text "")))))
+    (unless (string-empty-p snippet)
+      snippet)))
+
+(defun bluesky--post-buffer-name-snippet (post)
+  "Return a readable buffer-name snippet for POST."
+  (let* ((record (plist-get post :record))
+         (author (plist-get post :author))
+         (snippet (or (bluesky--clean-buffer-name-snippet
+                       (plist-get record :text))
+                      (bluesky--clean-buffer-name-snippet
+                       (plist-get author :handle))
+                      (bluesky--clean-buffer-name-snippet
+                       (plist-get post :uri))
+                      "post")))
+    (if (> (string-width snippet) bluesky-thread-buffer-snippet-width)
+        (truncate-string-to-width snippet
+                                  bluesky-thread-buffer-snippet-width
+                                  nil
+                                  nil
+                                  "...")
+      snippet)))
+
+(defun bluesky--thread-buffer-name (post)
+  "Return a thread buffer name for POST."
+  (format "*Bluesky Thread: %s*" (bluesky--post-buffer-name-snippet post)))
 
 (defun bluesky--set-timeline-state (key value)
   "Set timeline component state KEY to VALUE in the current buffer."
@@ -544,8 +577,9 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
                   (user-error "Selected post does not have a URI")))
          (host bluesky-host)
          (session bluesky-feed-session)
-         (handle (plist-get session :handle)))
-    (let ((buffer (get-buffer-create bluesky-thread-buffer-name)))
+         (handle (plist-get session :handle))
+         (buffer-name (bluesky--thread-buffer-name post)))
+    (let ((buffer (get-buffer-create buffer-name)))
       (with-current-buffer buffer
         (bluesky-mode))
       (let ((root (vui-mount
@@ -553,7 +587,7 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
                      :host host
                      :handle handle
                      :uri uri)
-                   bluesky-thread-buffer-name)))
+                   buffer-name)))
         (with-current-buffer (vui-instance-buffer root)
           (setq-local vui--root-instance root)
           (setq-local bluesky--navigation-override-mode t)
