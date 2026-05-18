@@ -176,6 +176,18 @@ TIMESTR is a string such as 2024-11-29T22:31:30.465Z."
   "Return a VUI fragment with nil CHILDREN removed."
   (apply #'vui-fragment (apply #'bluesky-ui--nodes children)))
 
+(defun bluesky-ui--post-id (post)
+  "Return a stable id for POST."
+  (or (plist-get post :uri)
+      (plist-get post :cid)
+      (secure-hash 'sha1 (prin1-to-string post))))
+
+(defun bluesky-ui--quoted-post-item-id (parent-id post)
+  "Return the render item id for POST quoted under PARENT-ID."
+  (if parent-id
+      (format "%s/quote/%s" parent-id (bluesky-ui--post-id post))
+    (bluesky-ui--post-id post)))
+
 (defun bluesky-ui--image-interval ()
   "Return the image queue polling interval."
   (/ 1.0 (max 0.1 bluesky-ui-image-loads-per-second)))
@@ -530,11 +542,12 @@ AUTHOR-DID is the DID of the post author."
 
 (defun bluesky-ui-quoted-post (host post depth)
   "Return a quoted POST from HOST with a visible indentation marker."
-  (let ((bluesky-ui--line-prefix
-         (concat (make-string (* 2 (1+ depth)) ?\s)
-                 (propertize "| " 'face 'bluesky-quote-bar)))
-        (bluesky-ui--quoted-post t))
-    (bluesky-ui-post host post nil 0)))
+  (let* ((item-id (bluesky-ui--quoted-post-item-id bluesky-ui--item-id post))
+         (bluesky-ui--line-prefix
+          (concat (make-string (* 2 (1+ depth)) ?\s)
+                  (propertize "| " 'face 'bluesky-quote-bar)))
+         (bluesky-ui--quoted-post t))
+    (bluesky-ui-post host post item-id 0)))
 
 (defun bluesky-ui-embed (host embed author-did &optional depth)
   "Return VUI nodes for EMBED from HOST.
@@ -578,7 +591,7 @@ AUTHOR-DID is the DID of the author of the post."
          (author (plist-get post :author))
          (author-did (plist-get author :did))
          (depth (or depth 0)))
-    (let ((bluesky-ui--item-id item-id))
+    (let ((bluesky-ui--item-id (or item-id (bluesky-ui--post-id post))))
       (vui-vstack
        :indent (* 2 depth)
        (bluesky-ui--separator depth)

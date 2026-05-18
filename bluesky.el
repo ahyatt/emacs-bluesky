@@ -97,6 +97,7 @@
 (define-key bluesky--navigation-override-map (kbd "R") #'bluesky-toggle-repost)
 (define-key bluesky--navigation-override-map (kbd "b") #'bluesky-toggle-bookmark)
 (define-key bluesky--navigation-override-map (kbd "r") #'bluesky-reply)
+(define-key bluesky--navigation-override-map (kbd "RET") #'bluesky-open-thread)
 
 (define-key bluesky-mode-map (kbd "g") #'bluesky-feed-refresh)
 (define-key bluesky-mode-map (kbd "j") #'bluesky-feed-next-post)
@@ -127,7 +128,7 @@
   "The VUI root instance for the Bluesky feed.")
 
 (defvar-local bluesky-current-post-overlay nil
-  "Overlay highlighting the current Bluesky post.")
+  "Overlay or overlays highlighting the current Bluesky post.")
 
 (defun bluesky--future-set-state (future state-key value-fn error-key)
   "Set VUI STATE-KEY from FUTURE using VALUE-FN, or ERROR-KEY on failure."
@@ -158,15 +159,63 @@
       (plist-get post :cid)
       (secure-hash 'sha1 (prin1-to-string post))))
 
-(defun bluesky--flatten-posts (posts &optional depth)
+(defun bluesky--item-id (post &optional parent-id)
+  "Return the navigable item id for POST, optionally quoted under PARENT-ID."
+  (if parent-id
+      (bluesky-ui--quoted-post-item-id parent-id post)
+    (bluesky--post-id post)))
+
+(defun bluesky--record-view-as-post (record-view)
+  "Return RECORD-VIEW as a post view plist, when possible."
+  (when (and record-view
+             (plist-get record-view :author)
+             (plist-get record-view :value))
+    (let ((post (copy-sequence record-view)))
+      (plist-put post :record (plist-get record-view :value)))))
+
+(defun bluesky--embedded-record-post (record-view)
+  "Return the post view embedded in RECORD-VIEW, when possible."
+  (when record-view
+    (let ((type (plist-get record-view :$type)))
+      (cond
+       ((and (equal type "app.bsky.embed.record#view")
+             (plist-get record-view :record))
+        (bluesky--embedded-record-post (plist-get record-view :record)))
+       (t
+        (bluesky--record-view-as-post record-view))))))
+
+(defun bluesky--embedded-quote-posts (embed)
+  "Return quoted post views embedded in EMBED."
+  (let (posts)
+    (when embed
+      (when-let* ((media (plist-get embed :media)))
+        (setq posts (append posts (bluesky--embedded-quote-posts media))))
+      (when-let* ((record (plist-get embed :record))
+                  (post (bluesky--embedded-record-post record)))
+        (push post posts)))
+    (nreverse posts)))
+
+(defun bluesky--post-quote-posts (post)
+  "Return quoted post views embedded in POST."
+  (let ((record (plist-get post :record)))
+    (bluesky--embedded-quote-posts
+     (or (plist-get post :embed)
+         (plist-get record :embed)))))
+
+(defun bluesky--flatten-posts (posts &optional depth render parent-id)
   "Return a flat list of navigable POSTS.
-Quoted records are rendered inline by `bluesky-ui-embed', so they are not
-included as separate timeline items."
+RENDER is non-nil when POSTS should be rendered as top-level list entries."
   (let ((depth (or depth 0))
         items)
     (dolist (post posts (nreverse items))
-      (let ((id (bluesky--post-id post)))
-        (push (list :id id :post post :depth depth) items)))))
+      (let ((id (bluesky--item-id post parent-id)))
+        (push (list :id id :post post :depth depth :render render) items)
+        (dolist (quote (bluesky--flatten-posts
+                        (bluesky--post-quote-posts post)
+                        (1+ depth)
+                        nil
+                        id))
+          (push quote items))))))
 
 (defun bluesky--flatten-thread (thread &optional depth)
   "Return a flat, depth-first list of posts from THREAD.
@@ -175,7 +224,8 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
         (post (plist-get thread :post))
         items)
     (when post
-      (push (list :id (bluesky--post-id post) :post post :depth depth) items))
+      (dolist (item (bluesky--flatten-posts (list post) depth t))
+        (push item items)))
     (dolist (reply (append (plist-get thread :replies) nil))
       (dolist (child (bluesky--flatten-thread reply (1+ depth)))
         (push child items)))
@@ -195,8 +245,8 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
     (dolist (ancestor (bluesky--thread-ancestors thread))
       (let ((post (plist-get ancestor :post)))
         (when post
-          (push (list :id (bluesky--post-id post) :post post :depth 0)
-                items))))
+          (dolist (item (bluesky--flatten-posts (list post) 0 t))
+            (push item items)))))
     (append (nreverse items) (bluesky--flatten-thread thread))))
 
 (defun bluesky--timeline-state (key)
@@ -230,36 +280,46 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
     (vui-set-state key value)))
 
 (defun bluesky--item-bounds (item-id)
-  "Return buffer bounds for navigable ITEM-ID."
+  "Return buffer bounds for each rendered range of navigable ITEM-ID."
   (let ((pos (point-min))
-        start end)
+        bounds)
     (while (< pos (point-max))
       (let* ((next (next-single-property-change
                     pos 'bluesky-item-id nil (point-max)))
              (value (get-text-property pos 'bluesky-item-id)))
         (when (equal value item-id)
-          (setq start (or start pos))
-          (setq end next))
+          (push (cons (save-excursion
+                        (goto-char pos)
+                        (line-beginning-position))
+                      (save-excursion
+                        (goto-char next)
+                        (line-end-position)))
+                bounds))
         (setq pos (max (1+ pos) next))))
-    (when (and start end)
-      (cons (save-excursion
-              (goto-char start)
-              (line-beginning-position))
-            (save-excursion
-              (goto-char end)
-              (line-end-position))))))
+    (let (coalesced)
+      (dolist (bounds (nreverse bounds) (nreverse coalesced))
+        (if-let* ((previous (car coalesced))
+                  (_ (<= (car bounds) (cdr previous))))
+            (setcdr previous (max (cdr previous) (cdr bounds)))
+          (push bounds coalesced))))))
 
 (defun bluesky--highlight-selected (item-id)
   "Highlight ITEM-ID in the current buffer."
-  (when (and (overlayp bluesky-current-post-overlay)
-             (overlay-buffer bluesky-current-post-overlay))
-    (delete-overlay bluesky-current-post-overlay)
-    (setq bluesky-current-post-overlay nil))
-  (when-let* ((bounds (and item-id (bluesky--item-bounds item-id))))
-    (setq bluesky-current-post-overlay (make-overlay (car bounds) (cdr bounds)))
-    (overlay-put bluesky-current-post-overlay 'face 'bluesky-current-post)
-    (overlay-put bluesky-current-post-overlay 'priority 10)
-    (goto-char (car bounds))))
+  (dolist (overlay (if (listp bluesky-current-post-overlay)
+                       bluesky-current-post-overlay
+                     (list bluesky-current-post-overlay)))
+    (when (and (overlayp overlay) (overlay-buffer overlay))
+      (delete-overlay overlay)))
+  (setq bluesky-current-post-overlay nil)
+  (when-let* ((bounds-list (and item-id (bluesky--item-bounds item-id))))
+    (setq bluesky-current-post-overlay
+          (mapcar (lambda (bounds)
+                    (let ((overlay (make-overlay (car bounds) (cdr bounds))))
+                      (overlay-put overlay 'face 'bluesky-current-post)
+                      (overlay-put overlay 'priority 10)
+                      overlay))
+                  bounds-list))
+    (goto-char (caar bounds-list))))
 
 (defun bluesky--schedule-highlight (item-id)
   "Highlight ITEM-ID after the current render cycle settles."
@@ -515,7 +575,7 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
           (extend-requested nil))
   :render
   (progn
-    (let ((current-items (bluesky--flatten-posts posts)))
+    (let ((current-items (bluesky--flatten-posts posts 0 t)))
       (vui-use-effect (posts selected-id)
         (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
           (vui-batch
@@ -567,7 +627,7 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
      (when loading
        (vui-text "Loading..." :face 'bluesky-muted))
      (if items
-         (vui-list items
+         (vui-list (seq-filter (lambda (item) (plist-get item :render)) items)
                    (lambda (item)
                      (bluesky-ui-post host
                                       (plist-get item :post)
@@ -620,7 +680,7 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
      (when loading
        (vui-text "Loading..." :face 'bluesky-muted))
      (if items
-         (vui-list items
+         (vui-list (seq-filter (lambda (item) (plist-get item :render)) items)
                    (lambda (item)
                      (bluesky-ui-post host
                                       (plist-get item :post)
