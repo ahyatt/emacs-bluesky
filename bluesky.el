@@ -168,6 +168,15 @@
       (bluesky-ui--quoted-post-item-id parent-id post)
     (bluesky--post-id post)))
 
+(defun bluesky--unique-item-id (base-id seen)
+  "Return a unique item id from BASE-ID, updating SEEN."
+  (let* ((count (1+ (or (gethash base-id seen) 0)))
+         (id (if (= count 1)
+                 base-id
+               (format "%s#%d" base-id count))))
+    (puthash base-id count seen)
+    id))
+
 (defun bluesky--record-view-as-post (record-view)
   "Return RECORD-VIEW as a post view plist, when possible."
   (when (and record-view
@@ -205,32 +214,37 @@
      (or (plist-get post :embed)
          (plist-get record :embed)))))
 
-(defun bluesky--flatten-posts (posts &optional depth render parent-id)
+(defun bluesky--flatten-posts (posts &optional depth render parent-id seen)
   "Return a flat list of navigable POSTS.
 RENDER is non-nil when POSTS should be rendered as top-level list entries."
   (let ((depth (or depth 0))
+        (seen (or seen (make-hash-table :test 'equal)))
         items)
     (dolist (post posts (nreverse items))
-      (let ((id (bluesky--item-id post parent-id)))
+      (let ((id (bluesky--unique-item-id
+                 (bluesky--item-id post parent-id)
+                 seen)))
         (push (list :id id :post post :depth depth :render render) items)
         (dolist (quote (bluesky--flatten-posts
                         (bluesky--post-quote-posts post)
                         (1+ depth)
                         nil
-                        id))
+                        id
+                        seen))
           (push quote items))))))
 
-(defun bluesky--flatten-thread (thread &optional depth)
+(defun bluesky--flatten-thread (thread &optional depth seen)
   "Return a flat, depth-first list of posts from THREAD.
 THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
   (let ((depth (or depth 0))
+        (seen (or seen (make-hash-table :test 'equal)))
         (post (plist-get thread :post))
         items)
     (when post
-      (dolist (item (bluesky--flatten-posts (list post) depth t))
+      (dolist (item (bluesky--flatten-posts (list post) depth t nil seen))
         (push item items)))
     (dolist (reply (append (plist-get thread :replies) nil))
-      (dolist (child (bluesky--flatten-thread reply (1+ depth)))
+      (dolist (child (bluesky--flatten-thread reply (1+ depth) seen))
         (push child items)))
     (nreverse items)))
 
@@ -244,13 +258,14 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
 
 (defun bluesky--thread-items (thread)
   "Return a flat list of renderable items for THREAD, including ancestors."
-  (let (items)
+  (let ((seen (make-hash-table :test 'equal))
+        items)
     (dolist (ancestor (bluesky--thread-ancestors thread))
       (let ((post (plist-get ancestor :post)))
         (when post
-          (dolist (item (bluesky--flatten-posts (list post) 0 t))
+          (dolist (item (bluesky--flatten-posts (list post) 0 t nil seen))
             (push item items)))))
-    (append (nreverse items) (bluesky--flatten-thread thread))))
+    (append (nreverse items) (bluesky--flatten-thread thread nil seen))))
 
 (defun bluesky--timeline-state (key)
   "Return timeline component state KEY in the current buffer."
