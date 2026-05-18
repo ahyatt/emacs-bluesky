@@ -51,11 +51,11 @@ Images are loaded asynchronously through `bluesky-ui--image-queue'."
   :type 'number)
 
 (defface bluesky-author-name
-  '((t :inherit font-lock-keyword-face))
+  '((t :inherit (bold font-lock-keyword-face)))
   "Face for author names in Bluesky.")
 
 (defface bluesky-author-handle
-  '((t :inherit font-lock-normal-face))
+  '((t :inherit shadow))
   "Face for author handles in Bluesky.")
 
 (defface bluesky-author-attribute
@@ -67,8 +67,24 @@ Images are loaded asynchronously through `bluesky-ui--image-queue'."
   "Face for labels and content warnings in Bluesky.")
 
 (defface bluesky-time
-  '((t :inherit font-lock-normal-face))
+  '((t :inherit shadow))
   "Face for time in Bluesky UI")
+
+(defface bluesky-post-separator
+  '((t :inherit shadow))
+  "Face for separators between Bluesky posts.")
+
+(defface bluesky-post-stats
+  '((t :inherit shadow))
+  "Face for Bluesky post engagement counts.")
+
+(defface bluesky-quote-label
+  '((t :inherit (bold shadow)))
+  "Face for quoted-post labels.")
+
+(defface bluesky-quote-bar
+  '((t :inherit shadow))
+  "Face for the vertical quote indentation marker.")
 
 (defface bluesky-mention
   '((t :inherit link))
@@ -101,6 +117,12 @@ Images are loaded asynchronously through `bluesky-ui--image-queue'."
 (defvar bluesky-ui--item-id nil
   "Current navigable Bluesky item id while rendering.")
 
+(defvar bluesky-ui--line-prefix nil
+  "Display prefix applied to text nodes in the current render scope.")
+
+(defvar bluesky-ui--quoted-post nil
+  "Non-nil while rendering a quoted post.")
+
 (defvar bluesky-ui--image-cache (make-hash-table :test 'equal)
   "Image cache keyed by URL.
 Values are plists with :status, :image, :url, :buffers, and :error.")
@@ -117,6 +139,9 @@ When `bluesky-ui--item-id' is non-nil, mark the text as belonging to
 that navigable item."
   (apply #'vui-text content
          (append props
+                 (when bluesky-ui--line-prefix
+                   (list 'line-prefix bluesky-ui--line-prefix
+                         'wrap-prefix bluesky-ui--line-prefix))
                  (when bluesky-ui--item-id
                    (list 'bluesky-item-id bluesky-ui--item-id)))))
 
@@ -354,19 +379,23 @@ REF can be a URL or a blob reference.  AUTHOR-DID is the uploading DID."
 (defun bluesky-ui-external (host external author-did)
   "Return a VUI node for EXTERNAL on HOST.
 AUTHOR-DID is the DID of the post author."
-  (bluesky-ui--fragment
-   (when-let* ((thumb-url (bluesky-ui--image-url-for-reference
-                           host (plist-get external :thumb) author-did)))
-     (bluesky-ui--async-image-node thumb-url thumb-url
-                                   :max-width bluesky-image-max-width))
-   (vui-space)
-   (bluesky-ui--text (or (plist-get external :title) "")
-                     :face 'bluesky-external-title
-                     'bluesky external)
-   (vui-newline)
-   (bluesky-ui--text (or (plist-get external :description) "")
-                     :face 'bluesky-external-description
-                     'bluesky external)))
+  (let* ((thumb-url (bluesky-ui--image-url-for-reference
+                     host (plist-get external :thumb) author-did))
+         (thumb-node (when thumb-url
+                       (bluesky-ui--async-image-node
+                        thumb-url thumb-url
+                        :max-width bluesky-image-max-width))))
+    (bluesky-ui--fragment
+     thumb-node
+     (when thumb-node
+       (vui-space))
+     (bluesky-ui--text (or (plist-get external :title) "")
+                       :face 'bluesky-external-title
+                       'bluesky external)
+     (vui-newline)
+     (bluesky-ui--text (or (plist-get external :description) "")
+                       :face 'bluesky-external-description
+                       'bluesky external))))
 
 (defun bluesky-ui--aspect-ratio-text (aspect-ratio)
   "Return a readable string for ASPECT-RATIO."
@@ -389,7 +418,7 @@ AUTHOR-DID is the DID of the post author."
                                    (plist-get viewer :bookmarked))
                               "bookmarked")))))
     (when states
-      (concat " - " (string-join states ", ")))))
+      (string-join states ", "))))
 
 (defun bluesky-ui--viewer-flags (viewer)
   "Return readable moderation/action flags from VIEWER."
@@ -423,6 +452,29 @@ AUTHOR-DID is the DID of the post author."
        (bluesky-ui--text (format "[%s]" (string-join all ", "))
                          :face 'bluesky-label)
        (vui-newline)))))
+
+(defun bluesky-ui--count-label (count singular &optional plural)
+  "Return COUNT followed by SINGULAR or PLURAL."
+  (format "%d %s" count (if (= count 1) singular (or plural (concat singular "s")))))
+
+(defun bluesky-ui--stats-text (post)
+  "Return a compact, readable stats string for POST."
+  (let ((stats (string-join
+                (list
+                 (bluesky-ui--count-label (or (plist-get post :replyCount) 0) "reply" "replies")
+                 (bluesky-ui--count-label (or (plist-get post :repostCount) 0) "repost")
+                 (bluesky-ui--count-label (or (plist-get post :quoteCount) 0) "quote")
+                 (bluesky-ui--count-label (or (plist-get post :likeCount) 0) "like"))
+                "  |  "))
+        (viewer (bluesky-ui--viewer-state-text (plist-get post :viewer))))
+    (if viewer
+        (concat stats "  |  " viewer)
+      stats)))
+
+(defun bluesky-ui--separator (&optional depth)
+  "Return a post separator for DEPTH."
+  (bluesky-ui--text "----------------------------------------------------------------"
+                    :face 'bluesky-post-separator))
 
 (defun bluesky-ui-video (video)
   "Return a VUI node for VIDEO embed view."
@@ -459,10 +511,9 @@ AUTHOR-DID is the DID of the post author."
            (plist-get record-view :record))
       (bluesky-ui-embedded-record host (plist-get record-view :record) depth))
      ((bluesky-ui--record-view-as-post record-view)
-      (bluesky-ui-post host
-                       (bluesky-ui--record-view-as-post record-view)
-                       nil
-                       (1+ (or depth 0))))
+      (bluesky-ui-quoted-post host
+                              (bluesky-ui--record-view-as-post record-view)
+                              (or depth 0)))
      ((equal type "app.bsky.embed.record#viewBlocked")
       (bluesky-ui--text "[blocked quoted record]"
                         :face 'bluesky-author-attribute))
@@ -476,6 +527,14 @@ AUTHOR-DID is the DID of the post author."
       (bluesky-ui--text (format "[unsupported quoted record: %s]"
                                 (or type "unknown"))
                         :face 'bluesky-author-attribute)))))
+
+(defun bluesky-ui-quoted-post (host post depth)
+  "Return a quoted POST from HOST with a visible indentation marker."
+  (let ((bluesky-ui--line-prefix
+         (concat (make-string (* 2 (1+ depth)) ?\s)
+                 (propertize "| " 'face 'bluesky-quote-bar)))
+        (bluesky-ui--quoted-post t))
+    (bluesky-ui-post host post nil 0)))
 
 (defun bluesky-ui-embed (host embed author-did &optional depth)
   "Return VUI nodes for EMBED from HOST.
@@ -517,27 +576,27 @@ AUTHOR-DID is the DID of the author of the post."
   "Return a VUI node for POST from HOST."
   (let* ((record (plist-get post :record))
          (author (plist-get post :author))
-         (author-did (plist-get author :did)))
+         (author-did (plist-get author :did))
+         (depth (or depth 0)))
     (let ((bluesky-ui--item-id item-id))
       (vui-vstack
-       :indent (* 2 (or depth 0))
+       :indent (* 2 depth)
+       (bluesky-ui--separator depth)
        (bluesky-ui--fragment
-        (when (> (or depth 0) 0)
-          (bluesky-ui--text "Quote: " :face 'bluesky-author-attribute))
+        (when (or bluesky-ui--quoted-post (> depth 0))
+          (bluesky-ui--fragment
+           (bluesky-ui--text "Quoted post" :face 'bluesky-quote-label)
+           (vui-newline)))
         (bluesky-ui-author author)
+        (vui-space)
+        (bluesky-ui--text "|" :face 'bluesky-time)
         (vui-space)
         (bluesky-ui--text (bluesky-ui-relative-time (plist-get record :createdAt))
                           :face 'bluesky-time))
        (bluesky-ui-labels post)
        (bluesky-ui-record host record author-did depth (plist-get post :embed))
-       (bluesky-ui--text (format "%d comments - %d repost - %d quotes - %d likes%s"
-                                 (or (plist-get post :replyCount) 0)
-                                 (or (plist-get post :repostCount) 0)
-                                 (or (plist-get post :quoteCount) 0)
-                                 (or (plist-get post :likeCount) 0)
-                                 (or (bluesky-ui--viewer-state-text
-                                      (plist-get post :viewer))
-                                     "")))
+       (bluesky-ui--text (bluesky-ui--stats-text post)
+                         :face 'bluesky-post-stats)
        (bluesky-ui--text "")))))
 
 (provide 'bluesky-ui)

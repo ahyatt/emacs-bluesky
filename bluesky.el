@@ -67,7 +67,11 @@
   "Face for subdued Bluesky UI text.")
 
 (defface bluesky-current-post
-  '((t :inherit highlight :extend t))
+  '((((class color) (background dark))
+     :background "#2b3f4a" :extend t)
+    (((class color) (background light))
+     :background "#e5f4fb" :extend t)
+    (t :inherit highlight :extend t))
   "Face for the currently selected Bluesky post.")
 
 (defvar-local bluesky--navigation-override-mode nil
