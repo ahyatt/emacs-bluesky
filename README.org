@@ -1,3 +1,66 @@
 # A Bluesky client for Emacs
 
-This repository hosts a Bluesky client for emacs.  As of now, this is currently being built, and there's no promise that it will ever be released, although that is my intention.
+This repository hosts a Bluesky client for Emacs.
+
+It is still under development and has not yet been submitted to any package
+archive.  The interface and storage details may change, although the intent is
+to release it eventually.
+
+* Installation
+
+With Emacs 30 or newer, install directly from this repository using
+=use-package= and =:vc=:
+
+#+begin_src emacs-lisp
+(use-package bluesky
+  :vc (:url "https://github.com/ahyatt/emacs-bluesky.git"))
+#+end_src
+
+If you are working from a local checkout instead, add the checkout directory to
+=load-path=:
+
+#+begin_src emacs-lisp
+(add-to-list 'load-path "/path/to/emacs-bluesky")
+(require 'bluesky)
+#+end_src
+
+* Credentials
+
+=M-x bluesky= looks up credentials with =auth-source= for the host in
+=bluesky-default-host=, which defaults to =bsky.social=.  Store your handle as
+the user and a Bluesky app password as the secret.
+
+For example, an =authinfo= entry can look like this:
+
+#+begin_example
+machine bsky.social login your-handle.bsky.social password your-app-password
+#+end_example
+
+You can also call =M-x bluesky= and enter the username or password when
+prompted.
+
+* Usage
+
+Run:
+
+#+begin_example
+M-x bluesky
+#+end_example
+
+This opens the timeline buffer.  In =bluesky-mode=:
+
+- =g= refreshes the timeline.
+- =l= loads more posts.
+- =j= and =k= move between posts.
+- =RET= opens the selected post's thread.
+- =o= opens links or media from the selected post.
+- =n= opens a new post composer.
+- =r= opens a reply composer.
+- =L= toggles like.
+- =R= toggles repost.
+- =b= toggles bookmark.
+
+Compose buffers use =bluesky-post-mode=:
+
+- =C-c C-c= submits the post or reply.
+- =C-c C-k= cancels the compose buffer.

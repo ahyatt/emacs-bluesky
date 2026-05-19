@@ -760,7 +760,10 @@ the password will be found via `auth-source-search'.  Otherwise, the
 user will be prompted for the password."
   (interactive)
   (let* ((host (or host bluesky-default-host))
-         (authinfo (car (auth-source-search :host host)))
+         (authinfo (car (auth-source-search :host host
+                                            :user (or username t)
+                                            :require '(:user :secret)
+                                            :max 1)))
          (username (or username
                        (when authinfo
                          (plist-get authinfo :user))
