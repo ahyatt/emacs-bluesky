@@ -60,6 +60,9 @@
 (defconst bluesky-tag-timeline-buffer-name-format "*Bluesky Tag: #%s*"
   "Format string for Bluesky tag timeline buffer names.")
 
+(defconst bluesky-feed-timeline-buffer-name-format "*Bluesky Feed: %s*"
+  "Format string for Bluesky custom feed timeline buffer names.")
+
 (defconst bluesky-thread-buffer-name "*Bluesky Thread*"
   "The name of the Bluesky thread buffer.")
 
@@ -401,6 +404,88 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
   "Return a tag timeline buffer name for TAG."
   (format bluesky-tag-timeline-buffer-name-format tag))
 
+(defun bluesky--feed-timeline-buffer-name (title)
+  "Return a custom feed timeline buffer name for TITLE."
+  (format bluesky-feed-timeline-buffer-name-format
+          (or (bluesky--clean-buffer-name-snippet title) "feed")))
+
+(defun bluesky--feed-generator-title (generator)
+  "Return a display title for feed GENERATOR."
+  (if (stringp generator)
+      generator
+    (or (plist-get generator :displayName)
+        (plist-get generator :uri)
+        "Custom feed")))
+
+(defun bluesky--feed-generator-uri (generator)
+  "Return the AT URI for feed GENERATOR."
+  (or (and (stringp generator) generator)
+      (plist-get generator :uri)))
+
+(defun bluesky--normalize-feed-uri (feed)
+  "Return FEED as a non-empty feed generator AT URI."
+  (let ((feed (string-trim (or feed ""))))
+    (when (string-empty-p feed)
+      (user-error "Feed URI is required"))
+    (unless (string-prefix-p "at://" feed)
+      (user-error "Feed must be an at:// URI"))
+    feed))
+
+(defun bluesky--feed-generator-label (generator)
+  "Return a completing-read label for feed GENERATOR."
+  (let* ((creator (plist-get generator :creator))
+         (handle (plist-get creator :handle))
+         (likes (plist-get generator :likeCount))
+         (description (bluesky--clean-buffer-name-snippet
+                       (plist-get generator :description))))
+    (string-join
+     (delq nil
+           (list (bluesky--feed-generator-title generator)
+                 (when handle (format "@%s" handle))
+                 (when likes (format "%s likes" likes))
+                 description))
+     " - ")))
+
+(defun bluesky--feed-generator-choices (generators)
+  "Return a completing-read alist for GENERATORS."
+  (let ((seen (make-hash-table :test 'equal)))
+    (mapcar
+     (lambda (generator)
+       (let* ((label (bluesky--feed-generator-label generator))
+              (count (1+ (or (gethash label seen) 0))))
+         (puthash label count seen)
+         (cons (if (= count 1)
+                   label
+                 (format "%s [%s]" label (plist-get generator :uri)))
+               generator)))
+     generators)))
+
+(defun bluesky--select-feed-generator (generators)
+  "Prompt for one feed generator from GENERATORS."
+  (let ((choices (bluesky--feed-generator-choices (append generators nil))))
+    (unless choices
+      (user-error "No feed generators found"))
+    (cdr (assoc (completing-read "Feed: " choices nil t) choices))))
+
+(defun bluesky--feed-discovery-future (host handle input)
+  "Return a future for feed discovery INPUT using HANDLE at HOST.
+INPUT may be an actor identifier, a search query, or an empty string for popular
+feed generators."
+  (let ((input (string-trim (or input ""))))
+    (cond
+     ((string-empty-p input)
+      (bluesky-conn-get-popular-feed-generators host handle nil 50))
+     ((or (string-prefix-p "@" input)
+          (string-prefix-p "did:" input))
+      (bluesky-conn-get-actor-feeds
+       host handle (bluesky--normalize-actor input) nil 50))
+     (t
+      (bluesky-conn-get-popular-feed-generators host handle nil 50 input)))))
+
+(defun bluesky--read-feed-input ()
+  "Read custom feed input."
+  (read-string "Feed URI, search, @actor, or empty for popular: "))
+
 (defun bluesky--set-timeline-state (key value)
   "Set timeline component state KEY to VALUE in the current buffer."
   (unless bluesky-feed-root
@@ -739,6 +824,37 @@ rendered heading and buffer."
      (format "Tag #%s" tag)
      (bluesky--tag-timeline-buffer-name tag))))
 
+(defun bluesky--open-custom-feed-timeline (feed host session &optional title)
+  "Open custom FEED on HOST using SESSION.
+FEED can be a feed generator view or an AT URI.  TITLE overrides the rendered
+heading and buffer label."
+  (let* ((feed-uri (bluesky--normalize-feed-uri
+                    (bluesky--feed-generator-uri feed)))
+         (title (or title (bluesky--feed-generator-title feed))))
+    (bluesky--mount-feed-buffer
+     (bluesky--feed-timeline-buffer-name title)
+     (vui-component 'bluesky-custom-feed-timeline
+       :host host
+       :handle (plist-get session :handle)
+       :feed feed-uri
+       :title title)
+     host
+     session
+     t)))
+
+(defun bluesky--discover-and-open-feed (input host session)
+  "Discover a feed from INPUT on HOST using SESSION, then open it."
+  (futur-bind
+   (bluesky--feed-discovery-future host (plist-get session :handle) input)
+   (lambda (response)
+     (let ((generator (bluesky--select-feed-generator
+                       (plist-get response :feeds))))
+       (bluesky--open-custom-feed-timeline generator host session)))
+   (lambda (err)
+     (message "Unable to discover Bluesky feeds: %s"
+              (bluesky--error-message err))
+     (futur-failed err))))
+
 (defun bluesky-open-thread ()
   "Open a thread view for the selected post."
   (interactive)
@@ -1009,6 +1125,85 @@ rendered heading and buffer."
          :on-click (lambda ()
                      (vui-set-state :extend-requested (current-time))))))))
 
+(vui-defcomponent bluesky-custom-feed-timeline (host handle feed title)
+  "Render custom Bluesky FEED."
+  :state ((posts nil)
+          (cursor nil)
+          (loading nil)
+          (error nil)
+          (items nil)
+          (selected-id nil)
+          (refresh-requested nil)
+          (extend-requested nil))
+  :render
+  (progn
+    (let ((current-items (bluesky--flatten-posts posts 0 t)))
+      (vui-use-effect (posts selected-id)
+        (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
+          (vui-batch
+           (vui-set-state :items current-items)
+           (when (and ids (not (member selected-id ids)))
+             (vui-set-state :selected-id (car ids)))))
+        nil))
+    (vui-use-effect (selected-id items)
+      (bluesky--schedule-highlight selected-id)
+      nil)
+    (vui-use-effect (host handle feed refresh-requested)
+      (vui-batch
+       (vui-set-state :loading t)
+       (vui-set-state :error nil))
+      (bluesky--future-set-state
+       (bluesky-conn-get-feed host handle feed nil 50)
+       :posts
+       (lambda (response)
+         (vui-batch
+          (vui-set-state :cursor (plist-get response :cursor)))
+         (mapcar (lambda (entry) (plist-get entry :post))
+                 (append (plist-get response :feed) nil)))
+       :error)
+      nil)
+    (vui-use-effect (extend-requested)
+      (when (and extend-requested cursor (not loading))
+        (vui-batch
+         (vui-set-state :loading t)
+         (vui-set-state :error nil))
+        (bluesky--future-set-state
+         (bluesky-conn-get-feed host handle feed cursor 50)
+         :posts
+         (lambda (response)
+           (vui-batch
+            (vui-set-state :cursor (plist-get response :cursor)))
+           (append posts
+                   (mapcar (lambda (entry) (plist-get entry :post))
+                           (append (plist-get response :feed) nil))))
+         :error))
+      nil)
+    (vui-vstack
+     (vui-hstack
+      (vui-text title :face 'bluesky-heading)
+      (vui-button "Refresh"
+        :on-click (lambda ()
+                    (vui-set-state :refresh-requested (current-time)))))
+     (when error
+       (vui-text (bluesky--error-message error) :face 'bluesky-error))
+     (when loading
+       (vui-text "Loading..." :face 'bluesky-muted))
+     (if items
+         (vui-list (seq-filter (lambda (item) (plist-get item :render)) items)
+                   (lambda (item)
+                     (bluesky-ui-post host
+                                      (plist-get item :post)
+                                      (plist-get item :id)
+                                      (plist-get item :depth)))
+                   (lambda (item) (plist-get item :id))
+                   :spacing 1)
+       (unless loading
+         (vui-text "No feed posts loaded." :face 'bluesky-muted)))
+     (when cursor
+       (vui-button "Load more"
+         :on-click (lambda ()
+                     (vui-set-state :extend-requested (current-time))))))))
+
 (vui-defcomponent bluesky-thread (host handle uri)
   "Render the thread containing URI."
   :state ((thread nil)
@@ -1139,6 +1334,22 @@ TAG may include a leading hash.  USERNAME, PASSWORD, and HOST mirror `bluesky'."
     (bluesky--with-session
      (lambda (host session)
        (bluesky--open-tag-timeline tag host session))
+     username
+     password
+     host)))
+
+(defun bluesky-feed (feed &optional username password host)
+  "Open a Bluesky custom feed timeline.
+FEED can be an at:// feed generator URI, a search query, an @actor handle, or an
+empty string to discover popular feeds.  USERNAME, PASSWORD, and HOST mirror
+`bluesky'."
+  (interactive (list (bluesky--read-feed-input)))
+  (let ((feed (string-trim (or feed ""))))
+    (bluesky--with-session
+     (lambda (host session)
+       (if (string-prefix-p "at://" feed)
+           (bluesky--open-custom-feed-timeline feed host session)
+         (bluesky--discover-and-open-feed feed host session)))
      username
      password
      host)))

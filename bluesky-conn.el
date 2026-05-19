@@ -346,6 +346,35 @@ the ranking order, and TAGS is a vector of tag filters without hash prefixes."
                             :sort sort
                             :tag tags))
 
+(defun bluesky-conn-get-feed (host handle feed &optional cursor limit)
+  "Get a custom FEED using HANDLE at HOST.
+FEED is the feed generator AT URI.  CURSOR defines where to start, and LIMIT is
+the number of posts to return."
+  (bluesky-conn--validate-feed-limit limit)
+  (bluesky-conn-call-authed host handle 'get "app.bsky.feed.getFeed"
+                            :feed feed
+                            :cursor cursor
+                            :limit limit))
+
+(defun bluesky-conn-get-actor-feeds (host handle actor &optional cursor limit)
+  "Get feed generators created by ACTOR using HANDLE at HOST.
+CURSOR defines where to start, and LIMIT is the number of feeds to return."
+  (bluesky-conn--validate-feed-limit limit)
+  (bluesky-conn-call-authed host handle 'get "app.bsky.feed.getActorFeeds"
+                            :actor actor
+                            :cursor cursor
+                            :limit limit))
+
+(defun bluesky-conn-get-popular-feed-generators (host handle &optional cursor limit query)
+  "Get popular feed generators using HANDLE at HOST.
+CURSOR defines where to start, LIMIT is the number of feeds to return, and QUERY
+filters the generator list."
+  (bluesky-conn--validate-feed-limit limit)
+  (bluesky-conn-call-authed host handle 'get "app.bsky.unspecced.getPopularFeedGenerators"
+                            :cursor cursor
+                            :limit limit
+                            :query query))
+
 (defun bluesky-conn-get-post-thread (host handle uri &optional depth parent-height)
   "Get the post thread for URI using HANDLE at HOST.
 DEPTH controls how many descendant levels to fetch, and PARENT-HEIGHT controls
