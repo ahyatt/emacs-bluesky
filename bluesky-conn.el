@@ -334,6 +334,18 @@ FILTER narrows the feed, and INCLUDE-PINS requests pinned posts."
                             :filter filter
                             :includePins include-pins))
 
+(defun bluesky-conn-search-posts (host handle query &optional cursor limit sort tags)
+  "Search posts for QUERY using HANDLE at HOST.
+CURSOR defines where to start, LIMIT is the number of posts to return, SORT is
+the ranking order, and TAGS is a vector of tag filters without hash prefixes."
+  (bluesky-conn--validate-feed-limit limit)
+  (bluesky-conn-call-authed host handle 'get "app.bsky.feed.searchPosts"
+                            :q query
+                            :cursor cursor
+                            :limit limit
+                            :sort sort
+                            :tag tags))
+
 (defun bluesky-conn-get-post-thread (host handle uri &optional depth parent-height)
   "Get the post thread for URI using HANDLE at HOST.
 DEPTH controls how many descendant levels to fetch, and PARENT-HEIGHT controls

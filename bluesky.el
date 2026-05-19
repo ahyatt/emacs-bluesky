@@ -54,6 +54,12 @@
 (defconst bluesky-author-timeline-buffer-name-format "*Bluesky Author: %s*"
   "Format string for Bluesky author timeline buffer names.")
 
+(defconst bluesky-search-timeline-buffer-name-format "*Bluesky Search: %s*"
+  "Format string for Bluesky search timeline buffer names.")
+
+(defconst bluesky-tag-timeline-buffer-name-format "*Bluesky Tag: #%s*"
+  "Format string for Bluesky tag timeline buffer names.")
+
 (defconst bluesky-thread-buffer-name "*Bluesky Thread*"
   "The name of the Bluesky thread buffer.")
 
@@ -365,6 +371,36 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
   "Return an author timeline buffer name for ACTOR."
   (format bluesky-author-timeline-buffer-name-format actor))
 
+(defun bluesky--normalize-search-query (query)
+  "Return QUERY trimmed for Bluesky search."
+  (let ((query (string-trim (or query ""))))
+    (when (string-empty-p query)
+      (user-error "Search query is required"))
+    query))
+
+(defun bluesky--normalize-tag (tag)
+  "Return TAG without a leading hash."
+  (let ((tag (string-remove-prefix "#" (string-trim (or tag "")))))
+    (when (string-empty-p tag)
+      (user-error "Tag is required"))
+    tag))
+
+(defun bluesky--read-search-query ()
+  "Read a Bluesky search query."
+  (bluesky--normalize-search-query (read-string "Search: ")))
+
+(defun bluesky--read-tag ()
+  "Read a Bluesky tag."
+  (bluesky--normalize-tag (read-string "Tag: ")))
+
+(defun bluesky--search-timeline-buffer-name (query)
+  "Return a search timeline buffer name for QUERY."
+  (format bluesky-search-timeline-buffer-name-format query))
+
+(defun bluesky--tag-timeline-buffer-name (tag)
+  "Return a tag timeline buffer name for TAG."
+  (format bluesky-tag-timeline-buffer-name-format tag))
+
 (defun bluesky--set-timeline-state (key value)
   "Set timeline component state KEY to VALUE in the current buffer."
   (unless bluesky-feed-root
@@ -674,6 +710,35 @@ When POP is non-nil, display the resulting buffer."
      session
      t)))
 
+(defun bluesky--open-search-timeline (query host session &optional tags title buffer-name)
+  "Open a search timeline for QUERY on HOST using SESSION.
+TAGS is an optional vector of tag filters.  TITLE and BUFFER-NAME customize the
+rendered heading and buffer."
+  (let ((query (bluesky--normalize-search-query query)))
+    (bluesky--mount-feed-buffer
+     (or buffer-name (bluesky--search-timeline-buffer-name query))
+     (vui-component 'bluesky-search-timeline
+       :host host
+       :handle (plist-get session :handle)
+       :query query
+       :tags tags
+       :title (or title (format "Search for %s" query)))
+     host
+     session
+     t)))
+
+(defun bluesky--open-tag-timeline (tag host session)
+  "Open a tag timeline for TAG on HOST using SESSION."
+  (let* ((tag (bluesky--normalize-tag tag))
+         (query (concat "#" tag)))
+    (bluesky--open-search-timeline
+     query
+     host
+     session
+     (vector tag)
+     (format "Tag #%s" tag)
+     (bluesky--tag-timeline-buffer-name tag))))
+
 (defun bluesky-open-thread ()
   "Open a thread view for the selected post."
   (interactive)
@@ -868,6 +933,82 @@ When POP is non-nil, display the resulting buffer."
          :on-click (lambda ()
                      (vui-set-state :extend-requested (current-time))))))))
 
+(vui-defcomponent bluesky-search-timeline (host handle query tags title)
+  "Render Bluesky search results for QUERY."
+  :state ((posts nil)
+          (cursor nil)
+          (loading nil)
+          (error nil)
+          (items nil)
+          (selected-id nil)
+          (refresh-requested nil)
+          (extend-requested nil))
+  :render
+  (progn
+    (let ((current-items (bluesky--flatten-posts posts 0 t)))
+      (vui-use-effect (posts selected-id)
+        (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
+          (vui-batch
+           (vui-set-state :items current-items)
+           (when (and ids (not (member selected-id ids)))
+             (vui-set-state :selected-id (car ids)))))
+        nil))
+    (vui-use-effect (selected-id items)
+      (bluesky--schedule-highlight selected-id)
+      nil)
+    (vui-use-effect (host handle query tags refresh-requested)
+      (vui-batch
+       (vui-set-state :loading t)
+       (vui-set-state :error nil))
+      (bluesky--future-set-state
+       (bluesky-conn-search-posts host handle query nil 50 "latest" tags)
+       :posts
+       (lambda (results)
+         (vui-batch
+          (vui-set-state :cursor (plist-get results :cursor)))
+         (append (plist-get results :posts) nil))
+       :error)
+      nil)
+    (vui-use-effect (extend-requested)
+      (when (and extend-requested cursor (not loading))
+        (vui-batch
+         (vui-set-state :loading t)
+         (vui-set-state :error nil))
+        (bluesky--future-set-state
+         (bluesky-conn-search-posts host handle query cursor 50 "latest" tags)
+         :posts
+         (lambda (results)
+           (vui-batch
+            (vui-set-state :cursor (plist-get results :cursor)))
+           (append posts (append (plist-get results :posts) nil)))
+         :error))
+      nil)
+    (vui-vstack
+     (vui-hstack
+      (vui-text title :face 'bluesky-heading)
+      (vui-button "Refresh"
+        :on-click (lambda ()
+                    (vui-set-state :refresh-requested (current-time)))))
+     (when error
+       (vui-text (bluesky--error-message error) :face 'bluesky-error))
+     (when loading
+       (vui-text "Loading..." :face 'bluesky-muted))
+     (if items
+         (vui-list (seq-filter (lambda (item) (plist-get item :render)) items)
+                   (lambda (item)
+                     (bluesky-ui-post host
+                                      (plist-get item :post)
+                                      (plist-get item :id)
+                                      (plist-get item :depth)))
+                   (lambda (item) (plist-get item :id))
+                   :spacing 1)
+       (unless loading
+         (vui-text "No search results loaded." :face 'bluesky-muted)))
+     (when cursor
+       (vui-button "Load more"
+         :on-click (lambda ()
+                     (vui-set-state :extend-requested (current-time))))))))
+
 (vui-defcomponent bluesky-thread (host handle uri)
   "Render the thread containing URI."
   :state ((thread nil)
@@ -974,6 +1115,30 @@ ACTOR can be a handle or DID.  USERNAME, PASSWORD, and HOST mirror `bluesky'."
     (bluesky--with-session
      (lambda (host session)
        (bluesky--open-author-timeline actor host session))
+     username
+     password
+     host)))
+
+(defun bluesky-search (query &optional username password host)
+  "Open a Bluesky search timeline for QUERY.
+USERNAME, PASSWORD, and HOST mirror `bluesky'."
+  (interactive (list (bluesky--read-search-query)))
+  (let ((query (bluesky--normalize-search-query query)))
+    (bluesky--with-session
+     (lambda (host session)
+       (bluesky--open-search-timeline query host session))
+     username
+     password
+     host)))
+
+(defun bluesky-tag (tag &optional username password host)
+  "Open a Bluesky tag timeline for TAG.
+TAG may include a leading hash.  USERNAME, PASSWORD, and HOST mirror `bluesky'."
+  (interactive (list (bluesky--read-tag)))
+  (let ((tag (bluesky--normalize-tag tag)))
+    (bluesky--with-session
+     (lambda (host session)
+       (bluesky--open-tag-timeline tag host session))
      username
      password
      host)))
