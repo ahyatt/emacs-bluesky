@@ -585,6 +585,9 @@ AUTHOR-DID is the DID of the author of the post."
          (bluesky-ui-video embed))
        (when-let* ((media (plist-get embed :media)))
          (bluesky-ui-embed host media author-did depth))
+       (when (and (plist-get embed :media)
+                  (plist-get embed :record))
+         (vui-newline))
        (when-let* ((record (plist-get embed :record)))
          (bluesky-ui-embedded-record host record depth))))))
 

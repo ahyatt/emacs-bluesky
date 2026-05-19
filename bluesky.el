@@ -119,6 +119,7 @@
   (setq truncate-lines t)
   (buffer-disable-undo)
   (setq-local bluesky--navigation-override-mode t)
+  (add-hook 'post-command-hook #'bluesky--sync-selection-from-point nil t)
   (visual-line-mode 1))
 
 (defvar-local bluesky-host bluesky-default-host
@@ -132,6 +133,12 @@
 
 (defvar-local bluesky-current-post-overlay nil
   "Overlay or overlays highlighting the current Bluesky post.")
+
+(defvar-local bluesky--syncing-selection-from-point nil
+  "Non-nil while point movement is updating Bluesky selection state.")
+
+(defvar-local bluesky--selection-from-point-preserve-next-highlight nil
+  "Non-nil when the next selection highlight should preserve point.")
 
 (defun bluesky--future-set-state (future state-key value-fn error-key)
   "Set VUI STATE-KEY from FUTURE using VALUE-FN, or ERROR-KEY on failure."
@@ -336,6 +343,43 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
         (vui--current-instance bluesky-feed-root))
     (vui-set-state key value)))
 
+(defun bluesky--item-id-at-point ()
+  "Return the Bluesky item id at point, if any."
+  (get-text-property (point) 'bluesky-item-id))
+
+(defun bluesky--item-id-near-point (direction)
+  "Return the closest Bluesky item id near point in DIRECTION.
+DIRECTION should be positive for the next item and negative for the previous
+item.  If point is already on an item, return that item."
+  (or (bluesky--item-id-at-point)
+      (let ((pos (point))
+            (limit (if (> direction 0) (point-max) (point-min)))
+            item-id)
+        (while (and (not item-id)
+                    (if (> direction 0) (< pos limit) (> pos limit)))
+          (setq pos (if (> direction 0)
+                        (next-single-property-change
+                         pos 'bluesky-item-id nil limit)
+                      (previous-single-property-change
+                       pos 'bluesky-item-id nil limit)))
+          (when pos
+            (setq item-id
+                  (if (> direction 0)
+                      (get-text-property pos 'bluesky-item-id)
+                    (get-text-property (max (point-min) (1- pos))
+                                       'bluesky-item-id)))))
+        item-id)))
+
+(defun bluesky--sync-selection-from-point ()
+  "Update selected Bluesky item from point without moving point."
+  (when-let* ((item-id (and (not bluesky--syncing-selection-from-point)
+                            (bluesky--item-id-at-point))))
+    (unless (equal item-id (bluesky--timeline-state :selected-id))
+      (let ((bluesky--syncing-selection-from-point t))
+        (setq bluesky--selection-from-point-preserve-next-highlight t)
+        (bluesky--set-timeline-state :selected-id item-id)
+        (bluesky--highlight-selected item-id t)))))
+
 (defun bluesky--item-bounds (item-id)
   "Return buffer bounds for each rendered range of navigable ITEM-ID."
   (let ((pos (point-min))
@@ -345,13 +389,7 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
                     pos 'bluesky-item-id nil (point-max)))
              (value (get-text-property pos 'bluesky-item-id)))
         (when (equal value item-id)
-          (push (cons (save-excursion
-                        (goto-char pos)
-                        (line-beginning-position))
-                      (save-excursion
-                        (goto-char next)
-                        (line-end-position)))
-                bounds))
+          (push (cons pos next) bounds))
         (setq pos (max (1+ pos) next))))
     (let (coalesced)
       (dolist (bounds (nreverse bounds) (nreverse coalesced))
@@ -360,7 +398,7 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
             (setcdr previous (max (cdr previous) (cdr bounds)))
           (push bounds coalesced))))))
 
-(defun bluesky--highlight-selected (item-id)
+(defun bluesky--highlight-selected (item-id &optional preserve-point)
   "Highlight ITEM-ID in the current buffer."
   (dolist (overlay (if (listp bluesky-current-post-overlay)
                        bluesky-current-post-overlay
@@ -376,9 +414,10 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
                       (overlay-put overlay 'priority 10)
                       overlay))
                   bounds-list))
-    (goto-char (caar bounds-list))))
+    (unless preserve-point
+      (goto-char (caar bounds-list)))))
 
-(defun bluesky--schedule-highlight (item-id)
+(defun bluesky--schedule-highlight (item-id &optional preserve-point)
   "Highlight ITEM-ID after the current render cycle settles."
   (let ((buffer (current-buffer)))
     (run-with-timer
@@ -386,7 +425,7 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
      (lambda ()
        (when (buffer-live-p buffer)
          (with-current-buffer buffer
-           (bluesky--highlight-selected item-id)))))))
+           (bluesky--highlight-selected item-id preserve-point)))))))
 
 (defun bluesky--highlight-current ()
   "Reapply the highlight for the current selected timeline item."
@@ -406,12 +445,21 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
   "Move current timeline selection by DELTA."
   (let* ((items (bluesky--timeline-state :items))
          (ids (mapcar (lambda (item) (plist-get item :id)) items))
-         (selected-id (bluesky--timeline-state :selected-id))
-         (index (or (cl-position selected-id ids :test #'equal) 0))
-         (next-index (max 0 (min (1- (length ids)) (+ index delta)))))
+         (point-id (bluesky--item-id-near-point delta))
+         (selected-id (or point-id (bluesky--timeline-state :selected-id)))
+         (index (cl-position selected-id ids :test #'equal))
+         (next-index
+          (max 0
+               (min (1- (length ids))
+                    (if index
+                        (if (bluesky--item-id-at-point)
+                            (+ index delta)
+                          index)
+                      0)))))
     (unless ids
       (user-error "No posts loaded"))
     (let ((next-id (nth next-index ids)))
+      (setq bluesky--selection-from-point-preserve-next-highlight nil)
       (bluesky--set-timeline-state :selected-id next-id)
       (bluesky--schedule-highlight next-id))))
 
@@ -649,7 +697,10 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
              (vui-set-state :selected-id (car ids)))))
         nil))
     (vui-use-effect (selected-id items)
-      (bluesky--schedule-highlight selected-id)
+      (bluesky--schedule-highlight
+       selected-id
+       bluesky--selection-from-point-preserve-next-highlight)
+      (setq bluesky--selection-from-point-preserve-next-highlight nil)
       nil)
     (vui-use-effect (host handle refresh-requested)
       (vui-batch
@@ -726,7 +777,10 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
              (vui-set-state :selected-id (car ids)))))
         nil))
     (vui-use-effect (selected-id items)
-      (bluesky--schedule-highlight selected-id)
+      (bluesky--schedule-highlight
+       selected-id
+       bluesky--selection-from-point-preserve-next-highlight)
+      (setq bluesky--selection-from-point-preserve-next-highlight nil)
       nil)
     (vui-use-effect (host handle uri refresh-requested)
       (vui-batch
