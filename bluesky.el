@@ -51,6 +51,9 @@
 (defconst bluesky-timeline-buffer-name "*Bluesky Timeline*"
   "The name of the Bluesky timeline buffer.")
 
+(defconst bluesky-author-timeline-buffer-name-format "*Bluesky Author: %s*"
+  "Format string for Bluesky author timeline buffer names.")
+
 (defconst bluesky-thread-buffer-name "*Bluesky Thread*"
   "The name of the Bluesky thread buffer.")
 
@@ -328,6 +331,40 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
   "Return a thread buffer name for POST."
   (format "*Bluesky Thread: %s*" (bluesky--post-buffer-name-snippet post)))
 
+(defun bluesky--normalize-actor (actor)
+  "Return ACTOR as an AT identifier without a leading at sign."
+  (let ((actor (string-remove-prefix "@" (string-trim (or actor "")))))
+    (when (string-empty-p actor)
+      (user-error "Actor is required"))
+    actor))
+
+(defun bluesky--post-author-actor (post)
+  "Return the best AT identifier for POST's author."
+  (when-let* ((author (plist-get post :author)))
+    (or (plist-get author :handle)
+        (plist-get author :did))))
+
+(defun bluesky--selected-author-actor ()
+  "Return the selected post author's AT identifier, if available."
+  (when-let* ((post (and (bound-and-true-p bluesky-feed-root)
+                         (bluesky--selected-post))))
+    (bluesky--post-author-actor post)))
+
+(defun bluesky--read-actor (&optional prompt)
+  "Read an AT actor identifier with PROMPT."
+  (let* ((default (bluesky--selected-author-actor))
+         (prompt (or prompt "Actor"))
+         (input (read-string
+                 (if default
+                     (format "%s (default %s): " prompt default)
+                   (format "%s: " prompt))
+                 nil nil default)))
+    (bluesky--normalize-actor input)))
+
+(defun bluesky--author-timeline-buffer-name (actor)
+  "Return an author timeline buffer name for ACTOR."
+  (format bluesky-author-timeline-buffer-name-format actor))
+
 (defun bluesky--set-timeline-state (key value)
   "Set timeline component state KEY to VALUE in the current buffer."
   (unless bluesky-feed-root
@@ -475,13 +512,25 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
 (defun bluesky--post-open-targets (post)
   "Return openable targets from POST."
   (let* ((record (plist-get post :record))
+         (host bluesky-host)
+         (session bluesky-feed-session)
+         (author (plist-get post :author))
+         (actor (bluesky--post-author-actor post))
+         (author-target
+          (when actor
+            (cons (format "Author timeline: @%s"
+                          (or (plist-get author :handle) actor))
+                  (lambda ()
+                    (bluesky--open-author-timeline actor host session)))))
          (targets (append (bluesky--facet-open-targets record)
                           (bluesky--embed-open-targets (plist-get post :embed))
-                          (bluesky--embed-open-targets (plist-get record :embed)))))
+                          (bluesky--embed-open-targets (plist-get record :embed))
+                          (when author-target
+                            (list author-target)))))
     (seq-uniq targets (lambda (a b) (equal (cdr a) (cdr b))))))
 
 (defun bluesky-open-current ()
-  "Open a link or media URL from the selected post."
+  "Open a link, media URL, or author timeline from the selected post."
   (interactive)
   (let* ((post (or (bluesky--selected-post)
                    (user-error "No post selected")))
@@ -493,8 +542,10 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
                      (let* ((choices (mapcar #'car targets))
                             (choice (completing-read "Open: " choices nil t)))
                        (assoc choice targets))))
-           (url (cdr target)))
-      (browse-url url))))
+           (action (cdr target)))
+      (if (functionp action)
+          (funcall action)
+        (browse-url action)))))
 
 (defun bluesky--request-refresh ()
   "Request a refresh for the active Bluesky VUI component."
@@ -591,6 +642,37 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
      :session bluesky-feed-session
      :reply-to post
      :source-buffer (current-buffer))))
+
+(defun bluesky--mount-feed-buffer (buffer-name component host session &optional pop)
+  "Mount COMPONENT in BUFFER-NAME using HOST and SESSION.
+When POP is non-nil, display the resulting buffer."
+  (let ((buffer (get-buffer-create buffer-name)))
+    (with-current-buffer buffer
+      (bluesky-mode))
+    (let ((root (vui-mount component buffer-name)))
+      (with-current-buffer (vui-instance-buffer root)
+        (setq-local vui--root-instance root)
+        (setq-local bluesky--navigation-override-mode t)
+        (setq-local bluesky-current-post-overlay nil)
+        (setq-local bluesky-host host)
+        (setq-local bluesky-feed-session session)
+        (setq-local bluesky-feed-root root))
+      (when pop
+        (pop-to-buffer (vui-instance-buffer root)))
+      root)))
+
+(defun bluesky--open-author-timeline (actor host session)
+  "Open ACTOR's author timeline on HOST using SESSION."
+  (let ((actor (bluesky--normalize-actor actor)))
+    (bluesky--mount-feed-buffer
+     (bluesky--author-timeline-buffer-name actor)
+     (vui-component 'bluesky-author-timeline
+       :host host
+       :handle (plist-get session :handle)
+       :actor actor)
+     host
+     session
+     t)))
 
 (defun bluesky-open-thread ()
   "Open a thread view for the selected post."
@@ -707,6 +789,85 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
          :on-click (lambda ()
                      (vui-set-state :extend-requested (current-time))))))))
 
+(vui-defcomponent bluesky-author-timeline (host handle actor)
+  "Render ACTOR's Bluesky author timeline."
+  :state ((posts nil)
+          (cursor nil)
+          (loading nil)
+          (error nil)
+          (items nil)
+          (selected-id nil)
+          (refresh-requested nil)
+          (extend-requested nil))
+  :render
+  (progn
+    (let ((current-items (bluesky--flatten-posts posts 0 t)))
+      (vui-use-effect (posts selected-id)
+        (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
+          (vui-batch
+           (vui-set-state :items current-items)
+           (when (and ids (not (member selected-id ids)))
+             (vui-set-state :selected-id (car ids)))))
+        nil))
+    (vui-use-effect (selected-id items)
+      (bluesky--schedule-highlight selected-id)
+      nil)
+    (vui-use-effect (host handle actor refresh-requested)
+      (vui-batch
+       (vui-set-state :loading t)
+       (vui-set-state :error nil))
+      (bluesky--future-set-state
+       (bluesky-conn-get-author-feed host handle actor nil 50)
+       :posts
+       (lambda (feed)
+         (vui-batch
+          (vui-set-state :cursor (plist-get feed :cursor)))
+         (mapcar (lambda (entry) (plist-get entry :post))
+                 (append (plist-get feed :feed) nil)))
+       :error)
+      nil)
+    (vui-use-effect (extend-requested)
+      (when (and extend-requested cursor (not loading))
+        (vui-batch
+         (vui-set-state :loading t)
+         (vui-set-state :error nil))
+        (bluesky--future-set-state
+         (bluesky-conn-get-author-feed host handle actor cursor 50)
+         :posts
+         (lambda (feed)
+           (vui-batch
+            (vui-set-state :cursor (plist-get feed :cursor)))
+           (append posts
+                   (mapcar (lambda (entry) (plist-get entry :post))
+                           (append (plist-get feed :feed) nil))))
+         :error))
+      nil)
+    (vui-vstack
+     (vui-hstack
+      (vui-text (format "Author timeline for %s" actor) :face 'bluesky-heading)
+      (vui-button "Refresh"
+        :on-click (lambda ()
+                    (vui-set-state :refresh-requested (current-time)))))
+     (when error
+       (vui-text (bluesky--error-message error) :face 'bluesky-error))
+     (when loading
+       (vui-text "Loading..." :face 'bluesky-muted))
+     (if items
+         (vui-list (seq-filter (lambda (item) (plist-get item :render)) items)
+                   (lambda (item)
+                     (bluesky-ui-post host
+                                      (plist-get item :post)
+                                      (plist-get item :id)
+                                      (plist-get item :depth)))
+                   (lambda (item) (plist-get item :id))
+                   :spacing 1)
+       (unless loading
+         (vui-text "No author posts loaded." :face 'bluesky-muted)))
+     (when cursor
+       (vui-button "Load more"
+         :on-click (lambda ()
+                     (vui-set-state :extend-requested (current-time))))))))
+
 (vui-defcomponent bluesky-thread (host handle uri)
   "Render the thread containing URI."
   :state ((thread nil)
@@ -756,18 +917,9 @@ THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
        (unless loading
          (vui-text "No thread posts loaded." :face 'bluesky-muted))))))
 
-(defun bluesky (&optional username password host)
-  "Connect to a Bluesky server and render the user's feed.
-
-USERNAME is the username to connect with.  It should not include the @
-prefix.  This can be nil, and if so, the user will be found via
-`auth-source-search'.  Otherwise, the user will be prompted for the
-username.
-
-PASSWORD is the password to connect with.  This can be nil, and if so,
-the password will be found via `auth-source-search'.  Otherwise, the
-user will be prompted for the password."
-  (interactive)
+(defun bluesky--authenticate (callback &optional username password host)
+  "Authenticate and call CALLBACK with host and session.
+USERNAME, PASSWORD, and HOST mirror `bluesky'."
   (let* ((host (or host bluesky-default-host))
          (authinfo (car (auth-source-search :host host
                                             :user (or username t)
@@ -796,26 +948,60 @@ user will be prompted for the password."
          (bluesky-conn-create-session host username password))
      (lambda (session)
        (message "Bluesky: connected as %s" (plist-get session :handle))
-       (let ((buffer (get-buffer-create bluesky-timeline-buffer-name)))
-         (with-current-buffer buffer
-           (bluesky-mode))
-         (let ((root (vui-mount
-                      (vui-component 'bluesky-timeline
-                        :host host
-                        :handle (plist-get session :handle))
-                      bluesky-timeline-buffer-name)))
-           (with-current-buffer (vui-instance-buffer root)
-             (setq-local vui--root-instance root)
-             (setq-local bluesky--navigation-override-mode t)
-             (setq-local bluesky-current-post-overlay nil)
-             (setq-local bluesky-host host)
-             (setq-local bluesky-feed-session session)
-             (setq-local bluesky-feed-root root))
-           root)))
+       (funcall callback host session))
      (lambda (err)
        (message "Unable to connect to Bluesky: %s"
                 (bluesky--error-message err))
        (futur-failed err)))))
+
+(defun bluesky--with-session (callback &optional username password host)
+  "Call CALLBACK with a usable host and session."
+  (if (and (not username)
+           (not password)
+           (bound-and-true-p bluesky-feed-session))
+      (funcall callback
+               (or host
+                   (and (boundp 'bluesky-host) bluesky-host)
+                   bluesky-default-host)
+               bluesky-feed-session)
+    (bluesky--authenticate callback username password host)))
+
+(defun bluesky-author (actor &optional username password host)
+  "Open ACTOR's Bluesky author timeline.
+ACTOR can be a handle or DID.  USERNAME, PASSWORD, and HOST mirror `bluesky'."
+  (interactive (list (bluesky--read-actor)))
+  (let ((actor (bluesky--normalize-actor actor)))
+    (bluesky--with-session
+     (lambda (host session)
+       (bluesky--open-author-timeline actor host session))
+     username
+     password
+     host)))
+
+(defun bluesky (&optional username password host)
+  "Connect to a Bluesky server and render the user's feed.
+
+USERNAME is the username to connect with.  It should not include the @
+prefix.  This can be nil, and if so, the user will be found via
+`auth-source-search'.  Otherwise, the user will be prompted for the
+username.
+
+PASSWORD is the password to connect with.  This can be nil, and if so,
+the password will be found via `auth-source-search'.  Otherwise, the
+user will be prompted for the password."
+  (interactive)
+  (bluesky--authenticate
+   (lambda (host session)
+     (bluesky--mount-feed-buffer
+      bluesky-timeline-buffer-name
+      (vui-component 'bluesky-timeline
+        :host host
+        :handle (plist-get session :handle))
+      host
+      session))
+   username
+   password
+   host))
 
 (provide 'bluesky)
 

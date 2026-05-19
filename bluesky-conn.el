@@ -309,14 +309,30 @@ EMBEDDING-RULES is a vector of app.bsky.feed.postgate rule records."
   (bluesky-conn-call-authed host handle 'post "app.bsky.bookmark.deleteBookmark"
                             :uri (plist-get post :uri)))
 
+(defun bluesky-conn--validate-feed-limit (limit)
+  "Signal an error unless LIMIT is nil or a valid feed page size."
+  (unless (or (null limit) (and (>= limit 1) (<= limit 100)))
+    (error "Number of posts to retrieve must be between 1 and 100")))
+
 (defun bluesky-conn-get-timeline (host handle &optional cursor limit)
   "Get the timeline for the user HANDLE at HOST.
 The CURSOR defines where to start at, and LIMIT is the number of posts
 to return."
-  (unless (or (null limit) (and (> limit 0) (< limit 100)))
-    (error "Number of posts to retrieve must be between 0 and 100"))
+  (bluesky-conn--validate-feed-limit limit)
   (bluesky-conn-call-authed host handle 'get "app.bsky.feed.getTimeline"
                             :cursor cursor :limit limit))
+
+(defun bluesky-conn-get-author-feed (host handle actor &optional cursor limit filter include-pins)
+  "Get ACTOR's author feed using HANDLE at HOST.
+The CURSOR defines where to start, LIMIT is the number of posts to return,
+FILTER narrows the feed, and INCLUDE-PINS requests pinned posts."
+  (bluesky-conn--validate-feed-limit limit)
+  (bluesky-conn-call-authed host handle 'get "app.bsky.feed.getAuthorFeed"
+                            :actor actor
+                            :cursor cursor
+                            :limit limit
+                            :filter filter
+                            :includePins include-pins))
 
 (defun bluesky-conn-get-post-thread (host handle uri &optional depth parent-height)
   "Get the post thread for URI using HANDLE at HOST.
