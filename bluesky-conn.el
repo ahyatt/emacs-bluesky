@@ -309,14 +309,71 @@ EMBEDDING-RULES is a vector of app.bsky.feed.postgate rule records."
   (bluesky-conn-call-authed host handle 'post "app.bsky.bookmark.deleteBookmark"
                             :uri (plist-get post :uri)))
 
+(defun bluesky-conn--validate-feed-limit (limit)
+  "Signal an error unless LIMIT is nil or a valid feed page size."
+  (unless (or (null limit) (and (>= limit 1) (<= limit 100)))
+    (error "Number of posts to retrieve must be between 1 and 100")))
+
 (defun bluesky-conn-get-timeline (host handle &optional cursor limit)
   "Get the timeline for the user HANDLE at HOST.
 The CURSOR defines where to start at, and LIMIT is the number of posts
 to return."
-  (unless (or (null limit) (and (> limit 0) (< limit 100)))
-    (error "Number of posts to retrieve must be between 0 and 100"))
+  (bluesky-conn--validate-feed-limit limit)
   (bluesky-conn-call-authed host handle 'get "app.bsky.feed.getTimeline"
                             :cursor cursor :limit limit))
+
+(defun bluesky-conn-get-author-feed (host handle actor &optional cursor limit filter include-pins)
+  "Get ACTOR's author feed using HANDLE at HOST.
+The CURSOR defines where to start, LIMIT is the number of posts to return,
+FILTER narrows the feed, and INCLUDE-PINS requests pinned posts."
+  (bluesky-conn--validate-feed-limit limit)
+  (bluesky-conn-call-authed host handle 'get "app.bsky.feed.getAuthorFeed"
+                            :actor actor
+                            :cursor cursor
+                            :limit limit
+                            :filter filter
+                            :includePins include-pins))
+
+(defun bluesky-conn-search-posts (host handle query &optional cursor limit sort tags)
+  "Search posts for QUERY using HANDLE at HOST.
+CURSOR defines where to start, LIMIT is the number of posts to return, SORT is
+the ranking order, and TAGS is a vector of tag filters without hash prefixes."
+  (bluesky-conn--validate-feed-limit limit)
+  (bluesky-conn-call-authed host handle 'get "app.bsky.feed.searchPosts"
+                            :q query
+                            :cursor cursor
+                            :limit limit
+                            :sort sort
+                            :tag tags))
+
+(defun bluesky-conn-get-feed (host handle feed &optional cursor limit)
+  "Get a custom FEED using HANDLE at HOST.
+FEED is the feed generator AT URI.  CURSOR defines where to start, and LIMIT is
+the number of posts to return."
+  (bluesky-conn--validate-feed-limit limit)
+  (bluesky-conn-call-authed host handle 'get "app.bsky.feed.getFeed"
+                            :feed feed
+                            :cursor cursor
+                            :limit limit))
+
+(defun bluesky-conn-get-actor-feeds (host handle actor &optional cursor limit)
+  "Get feed generators created by ACTOR using HANDLE at HOST.
+CURSOR defines where to start, and LIMIT is the number of feeds to return."
+  (bluesky-conn--validate-feed-limit limit)
+  (bluesky-conn-call-authed host handle 'get "app.bsky.feed.getActorFeeds"
+                            :actor actor
+                            :cursor cursor
+                            :limit limit))
+
+(defun bluesky-conn-get-popular-feed-generators (host handle &optional cursor limit query)
+  "Get popular feed generators using HANDLE at HOST.
+CURSOR defines where to start, LIMIT is the number of feeds to return, and QUERY
+filters the generator list."
+  (bluesky-conn--validate-feed-limit limit)
+  (bluesky-conn-call-authed host handle 'get "app.bsky.unspecced.getPopularFeedGenerators"
+                            :cursor cursor
+                            :limit limit
+                            :query query))
 
 (defun bluesky-conn-get-post-thread (host handle uri &optional depth parent-height)
   "Get the post thread for URI using HANDLE at HOST.
