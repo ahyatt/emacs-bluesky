@@ -183,18 +183,27 @@
              (plist-get record-view :author)
              (plist-get record-view :value))
     (let ((post (copy-sequence record-view)))
-      (plist-put post :record (plist-get record-view :value)))))
+      (setq post (plist-put post :record (plist-get record-view :value)))
+      (if (plist-get post :embed)
+          post
+        (plist-put post :embed
+                   (and (> (length (plist-get post :embeds)) 0)
+                        (aref (plist-get post :embeds) 0)))))))
+
+(defun bluesky--embedded-record-wrapper-p (record-view)
+  "Return non-nil when RECORD-VIEW is a wrapper around another record view."
+  (let ((type (plist-get record-view :$type)))
+    (and (plist-get record-view :record)
+         (not (bluesky--record-view-as-post record-view))
+         (or (null type)
+             (equal type "app.bsky.embed.record#view")))))
 
 (defun bluesky--embedded-record-post (record-view)
   "Return the post view embedded in RECORD-VIEW, when possible."
   (when record-view
-    (let ((type (plist-get record-view :$type)))
-      (cond
-       ((and (equal type "app.bsky.embed.record#view")
-             (plist-get record-view :record))
-        (bluesky--embedded-record-post (plist-get record-view :record)))
-       (t
-        (bluesky--record-view-as-post record-view))))))
+    (if (bluesky--embedded-record-wrapper-p record-view)
+        (bluesky--embedded-record-post (plist-get record-view :record))
+      (bluesky--record-view-as-post record-view))))
 
 (defun bluesky--embedded-quote-posts (embed)
   "Return quoted post views embedded in EMBED."

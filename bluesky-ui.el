@@ -513,14 +513,26 @@ AUTHOR-DID is the DID of the post author."
              (plist-get record-view :author)
              (plist-get record-view :value))
     (let ((post (copy-sequence record-view)))
-      (plist-put post :record (plist-get record-view :value)))))
+      (setq post (plist-put post :record (plist-get record-view :value)))
+      (if (plist-get post :embed)
+          post
+        (plist-put post :embed
+                   (and (> (length (plist-get post :embeds)) 0)
+                        (aref (plist-get post :embeds) 0)))))))
+
+(defun bluesky-ui--embedded-record-wrapper-p (record-view)
+  "Return non-nil when RECORD-VIEW is a wrapper around another record view."
+  (let ((type (plist-get record-view :$type)))
+    (and (plist-get record-view :record)
+         (not (bluesky-ui--record-view-as-post record-view))
+         (or (null type)
+             (equal type "app.bsky.embed.record#view")))))
 
 (defun bluesky-ui-embedded-record (host record-view depth)
   "Return a VUI node for embedded RECORD-VIEW on HOST."
   (let ((type (plist-get record-view :$type)))
     (cond
-     ((and (equal type "app.bsky.embed.record#view")
-           (plist-get record-view :record))
+     ((bluesky-ui--embedded-record-wrapper-p record-view)
       (bluesky-ui-embedded-record host (plist-get record-view :record) depth))
      ((bluesky-ui--record-view-as-post record-view)
       (bluesky-ui-quoted-post host
