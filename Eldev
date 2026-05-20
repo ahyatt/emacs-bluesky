@@ -1,0 +1,9 @@
+;;; -*- mode: emacs-lisp; lexical-binding: t -*-
+
+(eldev-use-package-archive 'gnu-elpa)
+(eldev-use-package-archive 'melpa-unstable)
+(eldev-use-plugin 'maintainer)
+
+(setf eldev-project-main-file "bluesky.el")
+(setf eldev-lint-default '(package))
+(setq checkdoc-force-docstrings-flag nil)

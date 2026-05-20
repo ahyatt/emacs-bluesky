@@ -491,8 +491,8 @@ AUTHOR-DID is the DID of the post author."
         (concat stats "  |  " viewer)
       stats)))
 
-(defun bluesky-ui--separator (&optional depth)
-  "Return a post separator for DEPTH."
+(defun bluesky-ui--separator (&optional _depth)
+  "Return a post separator."
   (bluesky-ui--text "----------------------------------------------------------------"
                     :face 'bluesky-post-separator))
 

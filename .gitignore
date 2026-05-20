@@ -1,2 +1,4 @@
 project-todo.org
 *.elc
+/.eldev
+/Eldev-local

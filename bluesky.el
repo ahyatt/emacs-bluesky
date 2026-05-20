@@ -1,10 +1,10 @@
-;;; bluesky.el, a Bluesky client for Emacs -*- lexical-binding: t -*-
+;;; bluesky.el --- A Bluesky client -*- lexical-binding: t; -*-
 
 ;; Copyright (c) 2024, 2026  Andrew Hyatt <ahyatt@gmail.com>
 
 ;; Author: Andrew Hyatt <ahyatt@gmail.com>
-;; Homepage: https://github.com/ahyatt/ekg
-;; Package-Requires: ((plz "0.9.0") (futur "1.7") (vui "20260130.2113"))
+;; Homepage: https://github.com/ahyatt/emacs-bluesky
+;; Package-Requires: ((emacs "30.1") (plz "0.9.0") (futur "1.7") (vui "1.0.0"))
 ;; Keywords: outlines, hypermedia
 ;; Version: 0.0.0
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -27,6 +27,8 @@
 ;; spec.  It should be compatible with any other server following that spec.
 ;; Emacs is not always so capable in the UI department, but this tries to render
 ;; everything important as clearly as possible.
+
+;;; Code:
 
 (require 'bluesky-conn)
 (require 'bluesky-model)
