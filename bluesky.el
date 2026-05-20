@@ -531,6 +531,9 @@ item.  If point is already on an item, return that item."
 (defun bluesky--sync-selection-from-point ()
   "Update selected Bluesky item from point without moving point."
   (when-let* ((item-id (and (not bluesky--syncing-selection-from-point)
+                            (not (memq this-command
+                                       '(bluesky-feed-next-post
+                                         bluesky-feed-previous-post)))
                             (bluesky--item-id-at-point))))
     (unless (equal item-id (bluesky--timeline-state :selected-id))
       (let ((bluesky--syncing-selection-from-point t))
@@ -619,6 +622,7 @@ item.  If point is already on an item, return that item."
     (let ((next-id (nth next-index ids)))
       (setq bluesky--selection-from-point-preserve-next-highlight nil)
       (bluesky--set-timeline-state :selected-id next-id)
+      (bluesky--highlight-selected next-id)
       (bluesky--schedule-highlight next-id))))
 
 (defun bluesky-feed-refresh ()
