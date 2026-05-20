@@ -824,6 +824,85 @@ heading and buffer label."
       (widget-button-press (point))
     (bluesky-open-thread)))
 
+(defun bluesky--feed-response-posts (response)
+  "Return post views from a feed RESPONSE."
+  (mapcar (lambda (entry) (plist-get entry :post))
+          (append (plist-get response :feed) nil)))
+
+(defun bluesky--render-paged-feed
+    (host title empty-message fetch-key fetch-page page-posts posts cursor
+          loading error items selected-id refresh-requested extend-requested
+          &optional preserve-next-highlight)
+  "Render a paged Bluesky feed.
+FETCH-KEY identifies the feed inputs for VUI effects.  FETCH-PAGE is called with
+a cursor, or nil for the first page.  PAGE-POSTS extracts post views from a
+response."
+  (let ((current-items (bluesky-model-flatten-posts posts 0 t)))
+    (vui-use-effect (posts selected-id)
+      (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
+        (vui-batch
+         (vui-set-state :items current-items)
+         (when (and ids (not (member selected-id ids)))
+           (vui-set-state :selected-id (car ids)))))
+      nil))
+  (vui-use-effect (selected-id items)
+    (bluesky--schedule-highlight selected-id preserve-next-highlight)
+    (when preserve-next-highlight
+      (setq bluesky--selection-from-point-preserve-next-highlight nil))
+    nil)
+  (vui-use-effect (fetch-key refresh-requested)
+    (vui-batch
+     (vui-set-state :loading t)
+     (vui-set-state :error nil))
+    (bluesky--future-set-state
+     (funcall fetch-page nil)
+     :posts
+     (lambda (response)
+       (vui-batch
+        (vui-set-state :cursor (plist-get response :cursor)))
+       (funcall page-posts response))
+     :error)
+    nil)
+  (vui-use-effect (extend-requested)
+    (when (and extend-requested cursor (not loading))
+      (vui-batch
+       (vui-set-state :loading t)
+       (vui-set-state :error nil))
+      (bluesky--future-set-state
+       (funcall fetch-page cursor)
+       :posts
+       (lambda (response)
+         (vui-batch
+          (vui-set-state :cursor (plist-get response :cursor)))
+         (append posts (funcall page-posts response)))
+       :error))
+    nil)
+  (vui-vstack
+   (vui-hstack
+    (vui-text title :face 'bluesky-heading)
+    (vui-button "Refresh"
+      :on-click (lambda ()
+                  (vui-set-state :refresh-requested (current-time)))))
+   (when error
+     (vui-text (bluesky--error-message error) :face 'bluesky-error))
+   (when loading
+     (vui-text "Loading..." :face 'bluesky-muted))
+   (if items
+       (vui-list (seq-filter (lambda (item) (plist-get item :render)) items)
+                 (lambda (item)
+                   (bluesky-ui-post host
+                                    (plist-get item :post)
+                                    (plist-get item :id)
+                                    (plist-get item :depth)))
+                 (lambda (item) (plist-get item :id))
+                 :spacing 1)
+     (unless loading
+       (vui-text empty-message :face 'bluesky-muted)))
+   (when cursor
+     (vui-button "Load more"
+       :on-click (lambda ()
+                   (vui-set-state :extend-requested (current-time)))))))
+
 (vui-defcomponent bluesky-timeline (host handle)
   "Render a Bluesky timeline."
   :state ((posts nil)
@@ -835,76 +914,17 @@ heading and buffer label."
           (refresh-requested nil)
           (extend-requested nil))
   :render
-  (progn
-    (let ((current-items (bluesky-model-flatten-posts posts 0 t)))
-      (vui-use-effect (posts selected-id)
-        (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
-          (vui-batch
-           (vui-set-state :items current-items)
-           (when (and ids (not (member selected-id ids)))
-             (vui-set-state :selected-id (car ids)))))
-        nil))
-    (vui-use-effect (selected-id items)
-      (bluesky--schedule-highlight
-       selected-id
-       bluesky--selection-from-point-preserve-next-highlight)
-      (setq bluesky--selection-from-point-preserve-next-highlight nil)
-      nil)
-    (vui-use-effect (host handle refresh-requested)
-      (vui-batch
-       (vui-set-state :loading t)
-       (vui-set-state :error nil))
-      (bluesky--future-set-state
-       (bluesky-conn-get-timeline host handle nil 50)
-       :posts
-       (lambda (feed)
-         (vui-batch
-          (vui-set-state :cursor (plist-get feed :cursor)))
-         (mapcar (lambda (entry) (plist-get entry :post))
-                 (append (plist-get feed :feed) nil)))
-       :error)
-      nil)
-    (vui-use-effect (extend-requested)
-      (when (and extend-requested cursor (not loading))
-        (vui-batch
-         (vui-set-state :loading t)
-         (vui-set-state :error nil))
-        (bluesky--future-set-state
-         (bluesky-conn-get-timeline host handle cursor 50)
-         :posts
-         (lambda (feed)
-           (vui-batch
-            (vui-set-state :cursor (plist-get feed :cursor)))
-           (append posts
-                   (mapcar (lambda (entry) (plist-get entry :post))
-                           (append (plist-get feed :feed) nil))))
-         :error))
-      nil)
-    (vui-vstack
-     (vui-hstack
-      (vui-text (format "Timeline for %s" handle) :face 'bluesky-heading)
-      (vui-button "Refresh"
-        :on-click (lambda ()
-                    (vui-set-state :refresh-requested (current-time)))))
-     (when error
-       (vui-text (bluesky--error-message error) :face 'bluesky-error))
-     (when loading
-       (vui-text "Loading..." :face 'bluesky-muted))
-     (if items
-         (vui-list (seq-filter (lambda (item) (plist-get item :render)) items)
-                   (lambda (item)
-                     (bluesky-ui-post host
-                                      (plist-get item :post)
-                                      (plist-get item :id)
-                                      (plist-get item :depth)))
-                   (lambda (item) (plist-get item :id))
-                   :spacing 1)
-       (unless loading
-         (vui-text "No posts loaded." :face 'bluesky-muted)))
-     (when cursor
-       (vui-button "Load more"
-         :on-click (lambda ()
-                     (vui-set-state :extend-requested (current-time))))))))
+  (bluesky--render-paged-feed
+   host
+   (format "Timeline for %s" handle)
+   "No posts loaded."
+   (list 'timeline host handle)
+   (lambda (cursor)
+     (bluesky-conn-get-timeline host handle cursor 50))
+   #'bluesky--feed-response-posts
+   posts cursor loading error items selected-id refresh-requested
+   extend-requested
+   bluesky--selection-from-point-preserve-next-highlight))
 
 (vui-defcomponent bluesky-author-timeline (host handle actor)
   "Render ACTOR's Bluesky author timeline."
@@ -917,73 +937,16 @@ heading and buffer label."
           (refresh-requested nil)
           (extend-requested nil))
   :render
-  (progn
-    (let ((current-items (bluesky-model-flatten-posts posts 0 t)))
-      (vui-use-effect (posts selected-id)
-        (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
-          (vui-batch
-           (vui-set-state :items current-items)
-           (when (and ids (not (member selected-id ids)))
-             (vui-set-state :selected-id (car ids)))))
-        nil))
-    (vui-use-effect (selected-id items)
-      (bluesky--schedule-highlight selected-id)
-      nil)
-    (vui-use-effect (host handle actor refresh-requested)
-      (vui-batch
-       (vui-set-state :loading t)
-       (vui-set-state :error nil))
-      (bluesky--future-set-state
-       (bluesky-conn-get-author-feed host handle actor nil 50)
-       :posts
-       (lambda (feed)
-         (vui-batch
-          (vui-set-state :cursor (plist-get feed :cursor)))
-         (mapcar (lambda (entry) (plist-get entry :post))
-                 (append (plist-get feed :feed) nil)))
-       :error)
-      nil)
-    (vui-use-effect (extend-requested)
-      (when (and extend-requested cursor (not loading))
-        (vui-batch
-         (vui-set-state :loading t)
-         (vui-set-state :error nil))
-        (bluesky--future-set-state
-         (bluesky-conn-get-author-feed host handle actor cursor 50)
-         :posts
-         (lambda (feed)
-           (vui-batch
-            (vui-set-state :cursor (plist-get feed :cursor)))
-           (append posts
-                   (mapcar (lambda (entry) (plist-get entry :post))
-                           (append (plist-get feed :feed) nil))))
-         :error))
-      nil)
-    (vui-vstack
-     (vui-hstack
-      (vui-text (format "Author timeline for %s" actor) :face 'bluesky-heading)
-      (vui-button "Refresh"
-        :on-click (lambda ()
-                    (vui-set-state :refresh-requested (current-time)))))
-     (when error
-       (vui-text (bluesky--error-message error) :face 'bluesky-error))
-     (when loading
-       (vui-text "Loading..." :face 'bluesky-muted))
-     (if items
-         (vui-list (seq-filter (lambda (item) (plist-get item :render)) items)
-                   (lambda (item)
-                     (bluesky-ui-post host
-                                      (plist-get item :post)
-                                      (plist-get item :id)
-                                      (plist-get item :depth)))
-                   (lambda (item) (plist-get item :id))
-                   :spacing 1)
-       (unless loading
-         (vui-text "No author posts loaded." :face 'bluesky-muted)))
-     (when cursor
-       (vui-button "Load more"
-         :on-click (lambda ()
-                     (vui-set-state :extend-requested (current-time))))))))
+  (bluesky--render-paged-feed
+   host
+   (format "Author timeline for %s" actor)
+   "No author posts loaded."
+   (list 'author host handle actor)
+   (lambda (cursor)
+     (bluesky-conn-get-author-feed host handle actor cursor 50))
+   #'bluesky--feed-response-posts
+   posts cursor loading error items selected-id refresh-requested
+   extend-requested))
 
 (vui-defcomponent bluesky-search-timeline (host handle query tags title)
   "Render Bluesky search results for QUERY."
@@ -996,70 +959,17 @@ heading and buffer label."
           (refresh-requested nil)
           (extend-requested nil))
   :render
-  (progn
-    (let ((current-items (bluesky-model-flatten-posts posts 0 t)))
-      (vui-use-effect (posts selected-id)
-        (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
-          (vui-batch
-           (vui-set-state :items current-items)
-           (when (and ids (not (member selected-id ids)))
-             (vui-set-state :selected-id (car ids)))))
-        nil))
-    (vui-use-effect (selected-id items)
-      (bluesky--schedule-highlight selected-id)
-      nil)
-    (vui-use-effect (host handle query tags refresh-requested)
-      (vui-batch
-       (vui-set-state :loading t)
-       (vui-set-state :error nil))
-      (bluesky--future-set-state
-       (bluesky-conn-search-posts host handle query nil 50 "latest" tags)
-       :posts
-       (lambda (results)
-         (vui-batch
-          (vui-set-state :cursor (plist-get results :cursor)))
-         (append (plist-get results :posts) nil))
-       :error)
-      nil)
-    (vui-use-effect (extend-requested)
-      (when (and extend-requested cursor (not loading))
-        (vui-batch
-         (vui-set-state :loading t)
-         (vui-set-state :error nil))
-        (bluesky--future-set-state
-         (bluesky-conn-search-posts host handle query cursor 50 "latest" tags)
-         :posts
-         (lambda (results)
-           (vui-batch
-            (vui-set-state :cursor (plist-get results :cursor)))
-           (append posts (append (plist-get results :posts) nil)))
-         :error))
-      nil)
-    (vui-vstack
-     (vui-hstack
-      (vui-text title :face 'bluesky-heading)
-      (vui-button "Refresh"
-        :on-click (lambda ()
-                    (vui-set-state :refresh-requested (current-time)))))
-     (when error
-       (vui-text (bluesky--error-message error) :face 'bluesky-error))
-     (when loading
-       (vui-text "Loading..." :face 'bluesky-muted))
-     (if items
-         (vui-list (seq-filter (lambda (item) (plist-get item :render)) items)
-                   (lambda (item)
-                     (bluesky-ui-post host
-                                      (plist-get item :post)
-                                      (plist-get item :id)
-                                      (plist-get item :depth)))
-                   (lambda (item) (plist-get item :id))
-                   :spacing 1)
-       (unless loading
-         (vui-text "No search results loaded." :face 'bluesky-muted)))
-     (when cursor
-       (vui-button "Load more"
-         :on-click (lambda ()
-                     (vui-set-state :extend-requested (current-time))))))))
+  (bluesky--render-paged-feed
+   host
+   title
+   "No search results loaded."
+   (list 'search host handle query tags)
+   (lambda (cursor)
+     (bluesky-conn-search-posts host handle query cursor 50 "latest" tags))
+   (lambda (results)
+     (append (plist-get results :posts) nil))
+   posts cursor loading error items selected-id refresh-requested
+   extend-requested))
 
 (vui-defcomponent bluesky-custom-feed-timeline (host handle feed title)
   "Render custom Bluesky FEED."
@@ -1072,73 +982,16 @@ heading and buffer label."
           (refresh-requested nil)
           (extend-requested nil))
   :render
-  (progn
-    (let ((current-items (bluesky-model-flatten-posts posts 0 t)))
-      (vui-use-effect (posts selected-id)
-        (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
-          (vui-batch
-           (vui-set-state :items current-items)
-           (when (and ids (not (member selected-id ids)))
-             (vui-set-state :selected-id (car ids)))))
-        nil))
-    (vui-use-effect (selected-id items)
-      (bluesky--schedule-highlight selected-id)
-      nil)
-    (vui-use-effect (host handle feed refresh-requested)
-      (vui-batch
-       (vui-set-state :loading t)
-       (vui-set-state :error nil))
-      (bluesky--future-set-state
-       (bluesky-conn-get-feed host handle feed nil 50)
-       :posts
-       (lambda (response)
-         (vui-batch
-          (vui-set-state :cursor (plist-get response :cursor)))
-         (mapcar (lambda (entry) (plist-get entry :post))
-                 (append (plist-get response :feed) nil)))
-       :error)
-      nil)
-    (vui-use-effect (extend-requested)
-      (when (and extend-requested cursor (not loading))
-        (vui-batch
-         (vui-set-state :loading t)
-         (vui-set-state :error nil))
-        (bluesky--future-set-state
-         (bluesky-conn-get-feed host handle feed cursor 50)
-         :posts
-         (lambda (response)
-           (vui-batch
-            (vui-set-state :cursor (plist-get response :cursor)))
-           (append posts
-                   (mapcar (lambda (entry) (plist-get entry :post))
-                           (append (plist-get response :feed) nil))))
-         :error))
-      nil)
-    (vui-vstack
-     (vui-hstack
-      (vui-text title :face 'bluesky-heading)
-      (vui-button "Refresh"
-        :on-click (lambda ()
-                    (vui-set-state :refresh-requested (current-time)))))
-     (when error
-       (vui-text (bluesky--error-message error) :face 'bluesky-error))
-     (when loading
-       (vui-text "Loading..." :face 'bluesky-muted))
-     (if items
-         (vui-list (seq-filter (lambda (item) (plist-get item :render)) items)
-                   (lambda (item)
-                     (bluesky-ui-post host
-                                      (plist-get item :post)
-                                      (plist-get item :id)
-                                      (plist-get item :depth)))
-                   (lambda (item) (plist-get item :id))
-                   :spacing 1)
-       (unless loading
-         (vui-text "No feed posts loaded." :face 'bluesky-muted)))
-     (when cursor
-       (vui-button "Load more"
-         :on-click (lambda ()
-                     (vui-set-state :extend-requested (current-time))))))))
+  (bluesky--render-paged-feed
+   host
+   title
+   "No feed posts loaded."
+   (list 'custom-feed host handle feed)
+   (lambda (cursor)
+     (bluesky-conn-get-feed host handle feed cursor 50))
+   #'bluesky--feed-response-posts
+   posts cursor loading error items selected-id refresh-requested
+   extend-requested))
 
 (vui-defcomponent bluesky-thread (host handle uri)
   "Render the thread containing URI."
