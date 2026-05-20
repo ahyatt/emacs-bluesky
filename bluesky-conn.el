@@ -91,13 +91,40 @@ the Bluesky API.")
 
 (defun bluesky-conn--query-string (args)
   "Return URL query string for plist ARGS."
-  (mapconcat (lambda (pair)
-               (format "%s=%s"
-                       (url-hexify-string
-                        (substring-no-properties (symbol-name (car pair)) 1))
-                       (url-hexify-string (format "%s" (cadr pair)))))
-             (seq-partition args 2)
+  (mapconcat #'identity
+             (apply #'append
+                    (mapcar (lambda (pair)
+                              (bluesky-conn--query-param
+                               (car pair)
+                               (cadr pair)))
+                            (seq-partition args 2)))
              "&"))
+
+(defun bluesky-conn--query-param (key value)
+  "Return URL query parameter strings for KEY and VALUE.
+Array values are encoded as repeated query parameters, as required by XRPC."
+  (let ((key (url-hexify-string
+              (substring-no-properties (symbol-name key) 1))))
+    (mapcar (lambda (value)
+              (format "%s=%s"
+                      key
+                      (url-hexify-string
+                       (bluesky-conn--query-value-string value))))
+            (bluesky-conn--query-values value))))
+
+(defun bluesky-conn--query-values (value)
+  "Return VALUE as a list of scalar query parameter values."
+  (cond
+   ((vectorp value) (append value nil))
+   ((and (consp value) (not (bluesky-conn--plist-p value))) value)
+   (t (list value))))
+
+(defun bluesky-conn--query-value-string (value)
+  "Return VALUE encoded as an XRPC query parameter string."
+  (cond
+   ((eq value t) "true")
+   ((eq value :json-false) "false")
+   (t (format "%s" value))))
 
 (defun bluesky-conn-call (host http-method method auth-header &rest args)
   "Call METHOD on the Bluesky instance at HOST.
@@ -241,10 +268,14 @@ COLLECTION is the collection to post to, and RECORD is the record, created by
   "Return the rkey parsed from RECORD-URI."
   (nth 2 (bluesky-conn--at-uri-parts record-uri)))
 
+(defun bluesky-conn--created-at ()
+  "Return the current time as an AT Protocol datetime in UTC."
+  (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
+
 (defun bluesky-conn-record (text langs facets &optional reply)
   "Return an app.bsky.feed.post record for TEXT.
 LANGS and FACETS are optional post metadata.  REPLY is a reply ref plist."
-  (append `(:text ,text :createdAt ,(format-time-string "%Y-%m-%dT%H:%M:%SZ"))
+  (append `(:text ,text :createdAt ,(bluesky-conn--created-at))
           (when langs `(:langs ,langs))
           (when facets `(:facets ,facets))
           (when reply `(:reply ,reply))))
@@ -255,7 +286,7 @@ LANGS and FACETS are optional post metadata.  REPLY is a reply ref plist."
    host handle "app.bsky.feed.like"
    (list :$type "app.bsky.feed.like"
          :subject (bluesky-conn--subject post)
-         :createdAt (format-time-string "%Y-%m-%dT%H:%M:%SZ"))))
+         :createdAt (bluesky-conn--created-at))))
 
 (defun bluesky-conn-create-repost (host handle post)
   "Repost POST using HANDLE at HOST."
@@ -263,7 +294,7 @@ LANGS and FACETS are optional post metadata.  REPLY is a reply ref plist."
    host handle "app.bsky.feed.repost"
    (list :$type "app.bsky.feed.repost"
          :subject (bluesky-conn--subject post)
-         :createdAt (format-time-string "%Y-%m-%dT%H:%M:%SZ"))))
+         :createdAt (bluesky-conn--created-at))))
 
 (defun bluesky-conn-create-reply (host handle post text)
   "Reply to POST with TEXT using HANDLE at HOST."
@@ -284,7 +315,7 @@ ALLOW is a vector of app.bsky.feed.threadgate rule records."
    (list :$type "app.bsky.feed.threadgate"
          :post post-uri
          :allow allow
-         :createdAt (format-time-string "%Y-%m-%dT%H:%M:%SZ"))
+         :createdAt (bluesky-conn--created-at))
    (bluesky-conn--record-rkey post-uri)))
 
 (defun bluesky-conn-create-postgate (host handle post-uri embedding-rules)
@@ -295,7 +326,7 @@ EMBEDDING-RULES is a vector of app.bsky.feed.postgate rule records."
    (list :$type "app.bsky.feed.postgate"
          :post post-uri
          :embeddingRules embedding-rules
-         :createdAt (format-time-string "%Y-%m-%dT%H:%M:%SZ"))
+         :createdAt (bluesky-conn--created-at))
    (bluesky-conn--record-rkey post-uri)))
 
 (defun bluesky-conn-create-bookmark (host handle post)
