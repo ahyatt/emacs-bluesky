@@ -25,6 +25,7 @@
 ;; needed, but also to stylize text.
 
 (require 'bluesky-conn)
+(require 'bluesky-model)
 (require 'plz)
 (require 'seq)
 (require 'subr-x)
@@ -175,18 +176,6 @@ TIMESTR is a string such as 2024-11-29T22:31:30.465Z."
 (defun bluesky-ui--fragment (&rest children)
   "Return a VUI fragment with nil CHILDREN removed."
   (apply #'vui-fragment (apply #'bluesky-ui--nodes children)))
-
-(defun bluesky-ui--post-id (post)
-  "Return a stable id for POST."
-  (or (plist-get post :uri)
-      (plist-get post :cid)
-      (secure-hash 'sha1 (prin1-to-string post))))
-
-(defun bluesky-ui--quoted-post-item-id (parent-id post)
-  "Return the render item id for POST quoted under PARENT-ID."
-  (if parent-id
-      (format "%s/quote/%s" parent-id (bluesky-ui--post-id post))
-    (bluesky-ui--post-id post)))
 
 (defun bluesky-ui--image-interval ()
   "Return the image queue polling interval."
@@ -507,36 +496,15 @@ AUTHOR-DID is the DID of the post author."
       :face 'bluesky-media
       'bluesky video))))
 
-(defun bluesky-ui--record-view-as-post (record-view)
-  "Return RECORD-VIEW as a post view plist, when possible."
-  (when (and record-view
-             (plist-get record-view :author)
-             (plist-get record-view :value))
-    (let ((post (copy-sequence record-view)))
-      (setq post (plist-put post :record (plist-get record-view :value)))
-      (if (plist-get post :embed)
-          post
-        (plist-put post :embed
-                   (and (> (length (plist-get post :embeds)) 0)
-                        (aref (plist-get post :embeds) 0)))))))
-
-(defun bluesky-ui--embedded-record-wrapper-p (record-view)
-  "Return non-nil when RECORD-VIEW is a wrapper around another record view."
-  (let ((type (plist-get record-view :$type)))
-    (and (plist-get record-view :record)
-         (not (bluesky-ui--record-view-as-post record-view))
-         (or (null type)
-             (equal type "app.bsky.embed.record#view")))))
-
 (defun bluesky-ui-embedded-record (host record-view depth)
   "Return a VUI node for embedded RECORD-VIEW on HOST."
   (let ((type (plist-get record-view :$type)))
     (cond
-     ((bluesky-ui--embedded-record-wrapper-p record-view)
+     ((bluesky-model-embedded-record-wrapper-p record-view)
       (bluesky-ui-embedded-record host (plist-get record-view :record) depth))
-     ((bluesky-ui--record-view-as-post record-view)
+     ((bluesky-model-record-view-as-post record-view)
       (bluesky-ui-quoted-post host
-                              (bluesky-ui--record-view-as-post record-view)
+                              (bluesky-model-record-view-as-post record-view)
                               (or depth 0)))
      ((equal type "app.bsky.embed.record#viewBlocked")
       (bluesky-ui--text "[blocked quoted record]"
@@ -554,7 +522,7 @@ AUTHOR-DID is the DID of the post author."
 
 (defun bluesky-ui-quoted-post (host post depth)
   "Return a quoted POST from HOST with a visible indentation marker."
-  (let* ((item-id (bluesky-ui--quoted-post-item-id bluesky-ui--item-id post))
+  (let* ((item-id (bluesky-model-quoted-post-item-id bluesky-ui--item-id post))
          (bluesky-ui--line-prefix
           (concat (make-string (* 2 (1+ depth)) ?\s)
                   (propertize "| " 'face 'bluesky-quote-bar)))
@@ -606,7 +574,7 @@ AUTHOR-DID is the DID of the author of the post."
          (author (plist-get post :author))
          (author-did (plist-get author :did))
          (depth (or depth 0)))
-    (let ((bluesky-ui--item-id (or item-id (bluesky-ui--post-id post))))
+    (let ((bluesky-ui--item-id (or item-id (bluesky-model-post-id post))))
       (vui-vstack
        :indent (* 2 depth)
        (bluesky-ui--separator depth)
