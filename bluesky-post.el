@@ -121,22 +121,35 @@ Use \\<bluesky-post-mode-map>\\[bluesky-post-submit] to submit and
   "Return non-nil when CHAR is an emoji modifier."
   (and (>= char #x1f3fb) (<= char #x1f3ff)))
 
+(defun bluesky-post--regional-indicator-p (char)
+  "Return non-nil when CHAR is a regional indicator symbol."
+  (and (>= char #x1f1e6) (<= char #x1f1ff)))
+
 (defun bluesky-post--character-count (text)
-  "Return an approximate Bluesky character count for TEXT."
+  "Return an approximate extended grapheme cluster count for TEXT."
   (let ((count 0)
-        join-next)
+        join-next
+        (regional-indicators 0))
     (dolist (char (string-to-list text) count)
       (cond
        ((= char #x200d)
-        (setq join-next t))
+        (setq join-next t
+              regional-indicators 0))
        ((or (bluesky-post--combining-char-p char)
             (bluesky-post--variation-selector-p char)
             (bluesky-post--emoji-modifier-p char))
         nil)
        (join-next
-        (setq join-next nil))
+        (setq join-next nil
+              regional-indicators 0))
+       ((bluesky-post--regional-indicator-p char)
+        (if (= (mod regional-indicators 2) 0)
+            (setq count (1+ count)
+                  regional-indicators 1)
+          (setq regional-indicators 0)))
        (t
-        (setq count (1+ count)))))))
+        (setq count (1+ count)
+              regional-indicators 0))))))
 
 (defun bluesky-post--byte-count (text)
   "Return the UTF-8 byte count for TEXT."
@@ -223,8 +236,28 @@ Use \\<bluesky-post-mode-map>\\[bluesky-post-submit] to submit and
   "Return non-nil if TEXT looks like an absolute URL."
   (string-match-p "\\`https?://" text))
 
-(defun bluesky-post--plain-url-facets (text)
-  "Return link facets for plain URLs in TEXT."
+(defun bluesky-post--facet-range (facet)
+  "Return FACET's byte range as a cons cell."
+  (let ((index (plist-get facet :index)))
+    (cons (plist-get index :byteStart)
+          (plist-get index :byteEnd))))
+
+(defun bluesky-post--range-overlaps-facet-p (start end facet)
+  "Return non-nil when byte range START to END overlaps FACET."
+  (pcase-let ((`(,facet-start . ,facet-end)
+               (bluesky-post--facet-range facet)))
+    (and (< start facet-end)
+         (< facet-start end))))
+
+(defun bluesky-post--range-overlaps-facets-p (start end facets)
+  "Return non-nil when byte range START to END overlaps any FACETS."
+  (cl-some (lambda (facet)
+             (bluesky-post--range-overlaps-facet-p start end facet))
+           facets))
+
+(defun bluesky-post--plain-url-facets (text &optional existing-facets)
+  "Return link facets for plain URLs in TEXT.
+URLs overlapping EXISTING-FACETS are ignored."
   (let ((start 0)
         facets)
     (while (string-match "\\(https?://[^[:space:]<>()]+\\)" text start)
@@ -236,7 +269,9 @@ Use \\<bluesky-post-mode-map>\\[bluesky-post-submit] to submit and
              (byte-end (+ byte-start
                           (bluesky-post--utf-8-bytes
                            (substring text char-start char-end)))))
-        (push (bluesky-post--link-facet byte-start byte-end url) facets)
+        (unless (bluesky-post--range-overlaps-facets-p
+                 byte-start byte-end existing-facets)
+          (push (bluesky-post--link-facet byte-start byte-end url) facets))
         (setq start char-end)))
     (nreverse facets)))
 
@@ -283,8 +318,10 @@ for the link URI.  Return a plist with :text and :facets."
             (_
              (list :text source :facets nil)))))
     (let* ((text (plist-get converted :text))
-           (facets (append (plist-get converted :facets)
-                           (bluesky-post--plain-url-facets text))))
+           (converted-facets (plist-get converted :facets))
+           (facets (append converted-facets
+                           (bluesky-post--plain-url-facets
+                            text converted-facets))))
       (list :text text
             :facets (and facets (vconcat facets))))))
 
