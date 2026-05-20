@@ -133,6 +133,9 @@
   (buffer-disable-undo)
   (setq-local bluesky--navigation-override-mode t)
   (add-hook 'post-command-hook #'bluesky--sync-selection-from-point nil t)
+  (add-hook 'bluesky-ui-after-rerender-hook
+            #'bluesky--highlight-current-after-ui-rerender
+            nil t)
   (visual-line-mode 1))
 
 (defvar-local bluesky-host bluesky-default-host
@@ -482,6 +485,14 @@ item.  If point is already on an item, return that item."
              (buffer-live-p (current-buffer)))
     (bluesky--highlight-selected
      (plist-get (vui-instance-state bluesky-feed-root) :selected-id))))
+
+(defun bluesky--highlight-current-after-ui-rerender ()
+  "Reapply selection highlight after a UI-driven rerender."
+  (when (and (bound-and-true-p bluesky-feed-root)
+             (buffer-live-p (current-buffer)))
+    (bluesky--highlight-selected
+     (plist-get (vui-instance-state bluesky-feed-root) :selected-id)
+     t)))
 
 (defun bluesky--move-selection (delta)
   "Move current timeline selection by DELTA."

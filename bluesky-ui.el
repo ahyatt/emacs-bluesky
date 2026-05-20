@@ -51,6 +51,9 @@ Images are loaded asynchronously through `bluesky-ui--image-queue'."
   "Maximum number of image downloads to start per second."
   :type 'number)
 
+(defvar-local bluesky-ui-after-rerender-hook nil
+  "Hook run after `bluesky-ui' rerenders a buffer for async media.")
+
 (defface bluesky-author-name
   '((t :inherit (bold font-lock-keyword-face)))
   "Face for author names in Bluesky.")
@@ -190,18 +193,34 @@ TIMESTR is a string such as 2024-11-29T22:31:30.465Z."
     (puthash key entry bluesky-ui--image-cache)
     entry))
 
+(defun bluesky-ui--restore-window-starts (starts)
+  "Restore window STARTS captured before a rerender."
+  (dolist (entry starts)
+    (let ((window (car entry))
+          (start (cdr entry)))
+      (when (window-live-p window)
+        (set-window-start window
+                          (min start (point-max))
+                          t)))))
+
+(defun bluesky-ui--rerender-preserving-position ()
+  "Rerender the current VUI buffer while preserving point and window starts."
+  (let ((point (point))
+        (starts (mapcar (lambda (window)
+                          (cons window (window-start window)))
+                        (get-buffer-window-list (current-buffer) nil t))))
+    (vui-rerender vui--root-instance)
+    (run-hooks 'bluesky-ui-after-rerender-hook)
+    (goto-char (min point (point-max)))
+    (bluesky-ui--restore-window-starts starts)))
+
 (defun bluesky-ui--image-rerender-buffers (buffers)
   "Rerender live VUI BUFFERS that requested an image."
   (dolist (buffer buffers)
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (when (bound-and-true-p vui--root-instance)
-          (vui-rerender vui--root-instance)
-          (cond
-           ((fboundp 'bluesky--highlight-current-now)
-            (bluesky--highlight-current-now))
-           ((fboundp 'bluesky--highlight-current)
-            (bluesky--highlight-current))))))))
+          (bluesky-ui--rerender-preserving-position))))))
 
 (defun bluesky-ui--image-queue-running-p ()
   "Return non-nil if the image queue timer is active."
