@@ -92,7 +92,10 @@
 
 (defun bluesky-model-flatten-posts (posts &optional depth render parent-id seen)
   "Return a flat list of navigable POSTS.
-RENDER is non-nil when POSTS should be rendered as top-level list entries."
+DEPTH is the visual nesting depth for POSTS.
+RENDER is non-nil when POSTS should be rendered as top-level list entries.
+PARENT-ID identifies the parent navigation item.
+SEEN tracks generated item identifiers."
   (let ((depth (or depth 0))
         (seen (or seen (make-hash-table :test 'equal)))
         items)
@@ -111,7 +114,9 @@ RENDER is non-nil when POSTS should be rendered as top-level list entries."
 
 (defun bluesky-model-flatten-thread (thread &optional depth seen)
   "Return a flat, depth-first list of posts from THREAD.
-THREAD is an `app.bsky.feed.defs#threadViewPost' shape."
+THREAD is an `app.bsky.feed.defs#threadViewPost' shape.
+DEPTH is the visual nesting depth for THREAD.
+SEEN tracks generated item identifiers."
   (let ((depth (or depth 0))
         (seen (or seen (make-hash-table :test 'equal)))
         (post (plist-get thread :post))

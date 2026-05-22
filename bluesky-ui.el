@@ -73,7 +73,7 @@ Images are loaded asynchronously through `bluesky-ui--image-queue'."
 
 (defface bluesky-time
   '((t :inherit shadow))
-  "Face for time in Bluesky UI")
+  "Face for time in Bluesky UI.")
 
 (defface bluesky-post-separator
   '((t :inherit shadow))
@@ -301,7 +301,7 @@ TIMESTR is a string such as 2024-11-29T22:31:30.465Z."
     (bluesky-ui--text " " 'display (append image properties))))
 
 (defun bluesky-ui--async-image-node (key url &rest properties)
-  "Return a VUI node for image KEY loaded from URL."
+  "Return a VUI node for image KEY loaded from URL with PROPERTIES."
   (when (and bluesky-ui-render-images key url)
     (let ((entry (bluesky-ui--enqueue-image key url)))
       (pcase (plist-get entry :status)
@@ -313,7 +313,7 @@ TIMESTR is a string such as 2024-11-29T22:31:30.465Z."
          (bluesky-ui--text "[image]" :face 'bluesky-image-placeholder))))))
 
 (defun bluesky-ui--image-by-url-node (url &rest properties)
-  "Return a VUI image node for URL, or nil if URL is missing."
+  "Return a VUI image node for URL with PROPERTIES, or nil if URL is missing."
   (when url
     (apply #'bluesky-ui--async-image-node url url properties)))
 

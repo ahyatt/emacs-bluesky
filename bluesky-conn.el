@@ -182,7 +182,7 @@ auth refreshes.  Return a `futur'."
                             bluesky-session
                             nil nil #'equal)))
     (unless session
-      (error "Unable to get the Bluesky authentication token, you may need to log in first."))
+      (error "Unable to get the Bluesky authentication token, you may need to log in first"))
     (futur-bind
      (apply #'bluesky-conn-call host http-method method (plist-get session :accessJwt) args)
      #'futur-done
@@ -197,7 +197,7 @@ auth refreshes.  Return a `futur'."
   "Create a session with the Bluesky API at HOST using HANDLE and PASSWORD.
 HANDLE is the user's handle on the Bluesky instance at HOST (without any
 leading `@'), and PASSWORD is the user's password, or a function that
-takes no arguments that produces it. This function will store the
+takes no arguments that produces it.  This function will store the
 session object in `bluesky-session' for future use, and also return it."
   (futur-bind
    (bluesky-conn-call
@@ -426,13 +426,13 @@ Anything in here is assumed to be cacheable indefinitely.")
       (puthash url (create-image (plz 'get url :as 'binary) nil 'data) bluesky-conn-cache)))
 
 (defun bluesky-conn-get-blob (host did cid)
-  "Get a blob with id CID from account DID."
+  "Get a blob with id CID from account DID on HOST."
   (plz 'get (format "https://%s/xrpc/com.atproto.sync.getBlob?did=%s&cid=%s"
                     host (url-hexify-string did) (url-hexify-string cid))
     :as 'binary))
 
 (defun bluesky-conn-get-image-by-ref (host did cid)
-  "Get an image with id CID from account DID."
+  "Get an image with id CID from account DID on HOST."
   (create-image (bluesky-conn-get-blob host did cid) nil 'data))
 
 (provide 'bluesky-conn)

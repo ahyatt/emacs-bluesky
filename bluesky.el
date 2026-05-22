@@ -7,7 +7,7 @@
 ;; Homepage: https://github.com/ahyatt/emacs-bluesky
 ;; Package-Requires: ((emacs "30.1") (plz "0.9.0") (futur "1.7") (vui "1.0.0"))
 ;; Keywords: outlines, hypermedia
-;; Version: 0.0.0
+;; Version: 0.1.0
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;;
 ;; This program is free software; you can redistribute it and/or
@@ -212,7 +212,7 @@
       snippet)))
 
 (defun bluesky--post-buffer-name-snippet (post)
-  "Return a readable buffer-name snippet for POST."
+  "Return a readable `buffer-name' snippet for POST."
   (let* ((record (plist-get post :record))
          (author (plist-get post :author))
          (snippet (or (bluesky--clean-buffer-name-snippet
@@ -326,7 +326,7 @@
     feed))
 
 (defun bluesky--feed-generator-label (generator)
-  "Return a completing-read label for feed GENERATOR."
+  "Return a `completing-read' label for feed GENERATOR."
   (let* ((creator (plist-get generator :creator))
          (handle (plist-get creator :handle))
          (likes (plist-get generator :likeCount))
@@ -341,7 +341,7 @@
      " - ")))
 
 (defun bluesky--feed-generator-choices (generators)
-  "Return a completing-read alist for GENERATORS."
+  "Return a `completing-read' alist for GENERATORS."
   (let ((seen (make-hash-table :test 'equal)))
     (mapcar
      (lambda (generator)
@@ -447,7 +447,8 @@ item.  If point is already on an item, return that item."
           (push bounds coalesced))))))
 
 (defun bluesky--highlight-selected (item-id &optional preserve-point)
-  "Highlight ITEM-ID in the current buffer."
+  "Highlight ITEM-ID in the current buffer.
+PRESERVE-POINT non-nil means do not move point to ITEM-ID."
   (dolist (overlay (if (listp bluesky-current-post-overlay)
                        bluesky-current-post-overlay
                      (list bluesky-current-post-overlay)))
@@ -466,7 +467,8 @@ item.  If point is already on an item, return that item."
       (goto-char (caar bounds-list)))))
 
 (defun bluesky--schedule-highlight (item-id &optional preserve-point)
-  "Highlight ITEM-ID after the current render cycle settles."
+  "Highlight ITEM-ID after the current render cycle settles.
+PRESERVE-POINT non-nil means do not move point to ITEM-ID."
   (let ((buffer (current-buffer)))
     (run-with-timer
      0.05 nil
@@ -848,9 +850,15 @@ heading and buffer label."
           loading error items selected-id refresh-requested extend-requested
           &optional preserve-next-highlight)
   "Render a paged Bluesky feed.
+HOST is the Bluesky host for the feed.
+TITLE is the heading text for the feed buffer.
+EMPTY-MESSAGE is shown when there are no posts.
 FETCH-KEY identifies the feed inputs for VUI effects.  FETCH-PAGE is called with
 a cursor, or nil for the first page.  PAGE-POSTS extracts post views from a
-response."
+response.  POSTS and CURSOR are the currently loaded posts and next-page
+cursor.  LOADING, ERROR, ITEMS, SELECTED-ID, REFRESH-REQUESTED, and
+EXTEND-REQUESTED are VUI state values.  PRESERVE-NEXT-HIGHLIGHT non-nil means
+the next selected-post highlight should not move point."
   (let ((current-items (bluesky-model-flatten-posts posts 0 t)))
     (vui-use-effect (posts selected-id)
       (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
@@ -1097,7 +1105,8 @@ USERNAME, PASSWORD, and HOST mirror `bluesky'."
        (futur-failed err)))))
 
 (defun bluesky--with-session (callback &optional username password host)
-  "Call CALLBACK with a usable host and session."
+  "Call CALLBACK with a usable host and session.
+USERNAME, PASSWORD, and HOST are optional login details."
   (if (and (not username)
            (not password)
            (bound-and-true-p bluesky-feed-session))
@@ -1108,6 +1117,7 @@ USERNAME, PASSWORD, and HOST mirror `bluesky'."
                bluesky-feed-session)
     (bluesky--authenticate callback username password host)))
 
+;;;###autoload
 (defun bluesky-author (actor &optional username password host)
   "Open ACTOR's Bluesky author timeline.
 ACTOR can be a handle or DID.  USERNAME, PASSWORD, and HOST mirror `bluesky'."
@@ -1120,6 +1130,7 @@ ACTOR can be a handle or DID.  USERNAME, PASSWORD, and HOST mirror `bluesky'."
      password
      host)))
 
+;;;###autoload
 (defun bluesky-search (query &optional username password host)
   "Open a Bluesky search timeline for QUERY.
 USERNAME, PASSWORD, and HOST mirror `bluesky'."
@@ -1132,6 +1143,7 @@ USERNAME, PASSWORD, and HOST mirror `bluesky'."
      password
      host)))
 
+;;;###autoload
 (defun bluesky-tag (tag &optional username password host)
   "Open a Bluesky tag timeline for TAG.
 TAG may include a leading hash.  USERNAME, PASSWORD, and HOST mirror `bluesky'."
@@ -1144,6 +1156,7 @@ TAG may include a leading hash.  USERNAME, PASSWORD, and HOST mirror `bluesky'."
      password
      host)))
 
+;;;###autoload
 (defun bluesky-feed (feed &optional username password host)
   "Open a Bluesky custom feed timeline.
 FEED can be an at:// feed generator URI, a search query, an @actor handle, or an
@@ -1160,6 +1173,7 @@ empty string to discover popular feeds.  USERNAME, PASSWORD, and HOST mirror
      password
      host)))
 
+;;;###autoload
 (defun bluesky (&optional username password host)
   "Connect to a Bluesky server and render the user's feed.
 
@@ -1170,7 +1184,9 @@ username.
 
 PASSWORD is the password to connect with.  This can be nil, and if so,
 the password will be found via `auth-source-search'.  Otherwise, the
-user will be prompted for the password."
+user will be prompted for the password.
+
+HOST is the Bluesky server to connect to."
   (interactive)
   (bluesky--authenticate
    (lambda (host session)
