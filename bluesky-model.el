@@ -3,6 +3,7 @@
 ;; Copyright (c) 2026  Andrew Hyatt <ahyatt@gmail.com>
 
 ;; Author: Andrew Hyatt <ahyatt@gmail.com>
+;; Assisted-by: ChatGPT:chatgpt-5.5
 ;; Homepage: https://github.com/ahyatt/emacs-bluesky
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 

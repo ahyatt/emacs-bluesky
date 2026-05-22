@@ -3,6 +3,7 @@
 ;; Copyright (c) 2024, 2026  Andrew Hyatt <ahyatt@gmail.com>
 
 ;; Author: Andrew Hyatt <ahyatt@gmail.com>
+;; Assisted-by: ChatGPT:chatgpt-5.5
 ;; Homepage: https://github.com/ahyatt/emacs-bluesky
 ;; Package-Requires: ((emacs "30.1") (plz "0.9.0") (futur "1.7") (vui "1.0.0"))
 ;; Keywords: outlines, hypermedia
