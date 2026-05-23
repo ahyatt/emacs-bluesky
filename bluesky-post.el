@@ -211,7 +211,7 @@ Use \\<bluesky-post-mode-map>\\[bluesky-post-submit] to submit and
 
 (defun bluesky-post-cycle-format ()
   "Cycle the source markup format."
-  (interactive)
+  (interactive nil bluesky-post-mode)
   (setq bluesky-post-source-format
         (bluesky-post--cycle bluesky-post-source-format
                              bluesky-post--source-formats))
@@ -221,7 +221,7 @@ Use \\<bluesky-post-mode-map>\\[bluesky-post-submit] to submit and
 
 (defun bluesky-post-cycle-reply-policy ()
   "Cycle the reply policy for the post being composed."
-  (interactive)
+  (interactive nil bluesky-post-mode)
   (setq bluesky-post-reply-policy
         (bluesky-post--cycle bluesky-post-reply-policy
                              bluesky-post--reply-policies))
@@ -231,7 +231,7 @@ Use \\<bluesky-post-mode-map>\\[bluesky-post-submit] to submit and
 
 (defun bluesky-post-toggle-embedding ()
   "Toggle whether the post may be embedded by other posts."
-  (interactive)
+  (interactive nil bluesky-post-mode)
   (setq bluesky-post-allow-embedding (not bluesky-post-allow-embedding))
   (force-mode-line-update)
   (message "Bluesky embeds: %s" (if bluesky-post-allow-embedding "on" "off")))
@@ -245,6 +245,12 @@ Use \\<bluesky-post-mode-map>\\[bluesky-post-submit] to submit and
   (list :index (list :byteStart start :byteEnd end)
         :features (vector (list :$type "app.bsky.richtext.facet#link"
                                 :uri uri))))
+
+(defun bluesky-post--tag-facet (start end tag)
+  "Return a hashtag facet for UTF-8 byte range START to END naming TAG."
+  (list :index (list :byteStart start :byteEnd end)
+        :features (vector (list :$type "app.bsky.richtext.facet#tag"
+                                :tag tag))))
 
 (defun bluesky-post--url-looking-p (text)
   "Return non-nil if TEXT looks like an absolute URL."
@@ -286,6 +292,31 @@ URLs overlapping EXISTING-FACETS are ignored."
         (unless (bluesky-post--range-overlaps-facets-p
                  byte-start byte-end existing-facets)
           (push (bluesky-post--link-facet byte-start byte-end url) facets))
+        (setq start char-end)))
+    (nreverse facets)))
+
+(defun bluesky-post--hashtag-facets (text &optional existing-facets)
+  "Return tag facets for hashtags in TEXT.
+Hashtags overlapping EXISTING-FACETS are ignored."
+  (let ((start 0)
+        facets)
+    (while (string-match "\\(?:\\`\\|[^[:alnum:]_]\\)\\(#+\\([[:alnum:]_]+\\)\\)" text start)
+      (let* ((hashes-and-tag (match-string 1 text))
+             (tag-body (match-string 2 text))
+             (char-start (match-beginning 1))
+             (char-end (match-end 1))
+             (tag (concat (substring hashes-and-tag 1 (- (length tag-body)))
+                          tag-body))
+             (byte-start (bluesky-post--utf-8-bytes
+                          (substring text 0 char-start)))
+             (byte-end (+ byte-start
+                          (bluesky-post--utf-8-bytes
+                           (substring text char-start char-end)))))
+        (unless (or (> (bluesky-post--character-count tag) 64)
+                    (> (bluesky-post--utf-8-bytes tag) 640)
+                    (bluesky-post--range-overlaps-facets-p
+                     byte-start byte-end existing-facets))
+          (push (bluesky-post--tag-facet byte-start byte-end tag) facets))
         (setq start char-end)))
     (nreverse facets)))
 
@@ -333,9 +364,12 @@ for the link URI.  Return a plist with :text and :facets."
              (list :text source :facets nil)))))
     (let* ((text (plist-get converted :text))
            (converted-facets (plist-get converted :facets))
-           (facets (append converted-facets
-                           (bluesky-post--plain-url-facets
-                            text converted-facets))))
+           (link-facets (append converted-facets
+                                (bluesky-post--plain-url-facets
+                                 text converted-facets)))
+           (facets (append link-facets
+                           (bluesky-post--hashtag-facets
+                            text link-facets))))
       (list :text text
             :facets (and facets (vconcat facets))))))
 
@@ -421,7 +455,7 @@ threadgate allow rules.  ALLOW-EMBEDDING is passed through to postgate handling.
 
 (defun bluesky-post-submit ()
   "Submit the current Bluesky post."
-  (interactive)
+  (interactive nil bluesky-post-mode)
   (let ((text (bluesky-post--content-string)))
     (cond
      (bluesky-post-submitting
@@ -462,7 +496,7 @@ threadgate allow rules.  ALLOW-EMBEDDING is passed through to postgate handling.
 
 (defun bluesky-post-cancel ()
   "Cancel the current Bluesky post."
-  (interactive)
+  (interactive nil bluesky-post-mode)
   (unless (or (not (buffer-modified-p))
               (yes-or-no-p "Discard this Bluesky post? "))
     (user-error "Canceled"))
