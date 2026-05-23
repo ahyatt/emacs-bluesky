@@ -524,7 +524,7 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
 
 (defun bluesky-feed-refresh ()
   "Refresh the Bluesky feed."
-  (interactive)
+  (interactive nil bluesky-mode)
   (if bluesky-feed-root
       (let ((vui--root-instance bluesky-feed-root)
             (vui--current-instance bluesky-feed-root))
@@ -533,7 +533,7 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
 
 (defun bluesky-feed-extend ()
   "Load the Bluesky feed."
-  (interactive)
+  (interactive nil bluesky-mode)
   (if bluesky-feed-root
       (let ((vui--root-instance bluesky-feed-root)
             (vui--current-instance bluesky-feed-root))
@@ -542,12 +542,12 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
 
 (defun bluesky-feed-next-post ()
   "Move to the next post in the timeline."
-  (interactive)
+  (interactive nil bluesky-mode)
   (bluesky--move-selection 1))
 
 (defun bluesky-feed-previous-post ()
   "Move to the previous post in the timeline."
-  (interactive)
+  (interactive nil bluesky-mode)
   (bluesky--move-selection -1))
 
 (defun bluesky--facet-open-targets (record)
@@ -601,7 +601,7 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
 
 (defun bluesky-open-current ()
   "Open a link, media URL, or author timeline from the selected post."
-  (interactive)
+  (interactive nil bluesky-mode)
   (let* ((post (or (bluesky--selected-post)
                    (user-error "No post selected")))
          (targets (bluesky--post-open-targets post)))
@@ -643,7 +643,7 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
 
 (defun bluesky-toggle-like ()
   "Like or unlike the selected post."
-  (interactive)
+  (interactive nil bluesky-mode)
   (let* ((post (or (bluesky--selected-post)
                    (user-error "No post selected")))
          (viewer (plist-get post :viewer))
@@ -660,7 +660,7 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
 
 (defun bluesky-toggle-repost ()
   "Repost or unrepost the selected post."
-  (interactive)
+  (interactive nil bluesky-mode)
   (let* ((post (or (bluesky--selected-post)
                    (user-error "No post selected")))
          (viewer (plist-get post :viewer))
@@ -677,7 +677,7 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
 
 (defun bluesky-toggle-bookmark ()
   "Bookmark or unbookmark the selected post."
-  (interactive)
+  (interactive nil bluesky-mode)
   (let* ((post (or (bluesky--selected-post)
                    (user-error "No post selected")))
          (viewer (plist-get post :viewer))
@@ -692,17 +692,25 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
                                      (plist-get bluesky-feed-session :handle)
                                      post)))))
 
-(defun bluesky-compose-post ()
-  "Open a buffer to compose a new Bluesky post."
+(defun bluesky-compose-post (&optional username password host)
+  "Open a buffer to compose a new Bluesky post.
+USERNAME, PASSWORD, and HOST mirror `bluesky'."
   (interactive)
-  (bluesky-post-compose
-   :host bluesky-host
-   :session bluesky-feed-session
-   :source-buffer (current-buffer)))
+  (let ((source-buffer (and (derived-mode-p 'bluesky-mode)
+                            (current-buffer))))
+    (bluesky--with-session
+     (lambda (host session)
+       (bluesky-post-compose
+        :host host
+        :session session
+        :source-buffer source-buffer))
+     username
+     password
+     host)))
 
 (defun bluesky-reply ()
   "Open a buffer to reply to the selected post."
-  (interactive)
+  (interactive nil bluesky-mode)
   (let ((post (or (bluesky--selected-post)
                   (user-error "No post selected"))))
     (when (bluesky-post-reply-disabled-p post)
@@ -806,7 +814,7 @@ heading and buffer label."
 
 (defun bluesky-open-thread ()
   "Open a thread view for the selected post."
-  (interactive)
+  (interactive nil bluesky-mode)
   (let* ((post (or (bluesky--selected-post)
                    (user-error "No post selected")))
          (uri (or (plist-get post :uri)
@@ -835,7 +843,7 @@ heading and buffer label."
 
 (defun bluesky-activate-or-open-thread ()
   "Activate the widget at point, or open the selected post thread."
-  (interactive)
+  (interactive nil bluesky-mode)
   (if (widget-at)
       (widget-button-press (point))
     (bluesky-open-thread)))
