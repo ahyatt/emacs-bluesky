@@ -599,7 +599,7 @@ AUTHOR-DID is the DID of the author of the post."
        :indent (* 2 depth)
        (bluesky-ui--separator depth)
        (bluesky-ui--fragment
-        (when (or bluesky-ui--quoted-post (> depth 0))
+        (when bluesky-ui--quoted-post
           (bluesky-ui--fragment
            (bluesky-ui--text "Quoted post" :face 'bluesky-quote-label)
            (vui-newline)))
