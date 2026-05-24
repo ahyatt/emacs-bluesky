@@ -450,6 +450,20 @@ the number of posts to return."
                             :cursor cursor
                             :limit limit))
 
+(defun bluesky-conn-list-notifications
+    (host handle &optional cursor limit reasons priority seen-at)
+  "List notifications for HANDLE at HOST.
+CURSOR defines where to start, LIMIT is the number of notifications to return,
+REASONS filters notification reasons, PRIORITY requests priority notifications,
+and SEEN-AT can filter by the app-view seen timestamp."
+  (bluesky-conn--validate-feed-limit limit)
+  (bluesky-conn-call-authed host handle 'get "app.bsky.notification.listNotifications"
+                            :cursor cursor
+                            :limit limit
+                            :reasons reasons
+                            :priority priority
+                            :seenAt seen-at))
+
 (defun bluesky-conn-get-actor-feeds (host handle actor &optional cursor limit)
   "Get feed generators created by ACTOR using HANDLE at HOST.
 CURSOR defines where to start, and LIMIT is the number of feeds to return."

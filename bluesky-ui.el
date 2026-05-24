@@ -492,6 +492,56 @@ AUTHOR-DID is the DID of the post author."
         (concat stats "  |  " viewer)
       stats)))
 
+(defun bluesky-ui--notification-reason-text (reason)
+  "Return a readable notification phrase for REASON."
+  (pcase reason
+    ("like" "liked your post")
+    ("repost" "reposted your post")
+    ("follow" "followed you")
+    ("mention" "mentioned you")
+    ("reply" "replied to you")
+    ("quote" "quoted your post")
+    ("starterpack-joined" "joined from your starter pack")
+    ("verified" "verified you")
+    ("unverified" "removed your verification")
+    ("like-via-repost" "liked your repost")
+    ("repost-via-repost" "reposted your repost")
+    ("subscribed-post" "posted")
+    ("contact-match" "matched a contact")
+    (_ (or reason "notified you"))))
+
+(defun bluesky-ui-notification (host notification &optional item-id)
+  "Return a VUI node for NOTIFICATION from HOST.
+HOST is accepted for symmetry with post rendering and future media handling."
+  (ignore host)
+  (let* ((author (plist-get notification :author))
+         (reason (plist-get notification :reason))
+         (subject (plist-get notification :reasonSubject))
+         (is-read (bluesky-ui--json-truthy-p
+                   (plist-get notification :isRead)))
+         (bluesky-ui--item-id (or item-id (plist-get notification :uri))))
+    (vui-vstack
+     (bluesky-ui--separator)
+     (bluesky-ui--fragment
+      (bluesky-ui-author author)
+      (vui-space)
+      (bluesky-ui--text (bluesky-ui--notification-reason-text reason)
+                        :face 'bluesky-author-attribute)
+      (vui-space)
+      (bluesky-ui--text "|" :face 'bluesky-time)
+      (vui-space)
+      (bluesky-ui--text (bluesky-ui-relative-time
+                         (plist-get notification :indexedAt))
+                        :face 'bluesky-time)
+      (unless is-read
+        (bluesky-ui--fragment
+         (vui-space)
+         (bluesky-ui--text "[unread]" :face 'bluesky-label))))
+     (when subject
+       (bluesky-ui--text (format "Subject: %s" subject)
+                         :face 'bluesky-post-stats))
+     (bluesky-ui--text ""))))
+
 (defun bluesky-ui--separator (&optional _depth)
   "Return a post separator."
   (bluesky-ui--text "----------------------------------------------------------------"

@@ -81,6 +81,9 @@
                      bluesky-search
                      bluesky-tag
                      bluesky-feed
+                     bluesky-notifications
+                     bluesky-likes
+                     bluesky-replies
                      bluesky-compose-post))
     (should-not (command-modes command))))
 
