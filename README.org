@@ -2,6 +2,8 @@
 
 This repository hosts a Bluesky client for Emacs.
 
+[[file:screenshots/bluesky-screenshot.png]]
+
 It is still under development and has not yet been submitted to any package
 archive.  The interface and storage details may change, although the intent is
 to release it eventually.
@@ -62,6 +64,15 @@ This opens the timeline buffer.  In =bluesky-mode=:
 
 Other feed-like views:
 
+- =M-x bluesky-author= opens an author's posts.  From a Bluesky buffer it
+  defaults to the selected post's author and completes authors seen in loaded
+  timelines, threads, searches, custom feeds, and notifications.
+- =M-x bluesky-search= opens a post search timeline.
+- =M-x bluesky-tag= opens a hashtag search timeline.
+- =M-x bluesky-feed= opens custom feed generators.  An =at://= URI opens that
+  feed directly, a search string discovers matching custom feeds, an =@handle=
+  discovers custom feeds created by that actor, and an empty input discovers
+  popular custom feeds.  Use =M-x bluesky-author= for a user's posts.
 - =M-x bluesky-notifications= opens account notifications.
 - =M-x bluesky-likes= opens like notifications.
 - =M-x bluesky-replies= opens reply notifications.
