@@ -28,8 +28,11 @@
 (require 'bluesky-conn)
 (require 'cl-lib)
 (require 'futur)
+(require 'image)
 (require 'mailcap)
 (require 'subr-x)
+
+(declare-function image-size "image.c" (spec &optional pixels frame))
 
 (defgroup bluesky nil
   "Bluesky client for Emacs."
