@@ -39,6 +39,25 @@
                   (list :tag (vector "emacs" "at proto")))
                  "tag=emacs&tag=at%20proto")))
 
+(ert-deftest bluesky-conn-list-notifications-uses-repeated-reasons ()
+  (let (call)
+    (cl-letf (((symbol-function 'bluesky-conn-call-authed)
+               (lambda (&rest args)
+                 (setq call args)
+                 :future)))
+      (should (eq (bluesky-conn-list-notifications
+                   "bsky.social" "user.test" "cursor" 50
+                   (vector "like" "reply"))
+                  :future))
+      (should (equal call
+                     '("bsky.social" "user.test" get
+                        "app.bsky.notification.listNotifications"
+                        :cursor "cursor"
+                        :limit 50
+                        :reasons ["like" "reply"]
+                        :priority nil
+                        :seenAt nil))))))
+
 (ert-deftest bluesky-conn-created-at-uses-utc ()
   (let (args)
     (cl-letf (((symbol-function 'format-time-string)

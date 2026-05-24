@@ -67,6 +67,12 @@
 (defconst bluesky-feed-timeline-buffer-name-format "*Bluesky Feed: %s*"
   "Format string for Bluesky custom feed timeline buffer names.")
 
+(defconst bluesky-notifications-buffer-name "*Bluesky Notifications*"
+  "The name of the Bluesky notifications buffer.")
+
+(defconst bluesky-notifications-buffer-name-format "*Bluesky Notifications: %s*"
+  "Format string for filtered Bluesky notifications buffer names.")
+
 (defconst bluesky-thread-buffer-name "*Bluesky Thread*"
   "The name of the Bluesky thread buffer.")
 
@@ -200,6 +206,10 @@
   "Return the selected post in the current buffer."
   (plist-get (bluesky--selected-item) :post))
 
+(defun bluesky--selected-notification ()
+  "Return the selected notification in the current buffer."
+  (plist-get (bluesky--selected-item) :notification))
+
 (defun bluesky--json-truthy-p (value)
   "Return non-nil when VALUE represents true in Bluesky JSON data."
   (and value (not (eq value :json-false))))
@@ -302,6 +312,12 @@
   "Return a custom feed timeline buffer name for TITLE."
   (format bluesky-feed-timeline-buffer-name-format
           (or (bluesky--clean-buffer-name-snippet title) "feed")))
+
+(defun bluesky--notifications-buffer-name (title)
+  "Return a notifications buffer name for TITLE."
+  (if title
+      (format bluesky-notifications-buffer-name-format title)
+    bluesky-notifications-buffer-name))
 
 (defun bluesky--feed-generator-title (generator)
   "Return a display title for feed GENERATOR."
@@ -599,14 +615,36 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
                             (list author-target)))))
     (seq-uniq targets (lambda (a b) (equal (cdr a) (cdr b))))))
 
+(defun bluesky--notification-open-targets (notification)
+  "Return openable targets from NOTIFICATION."
+  (let* ((host bluesky-host)
+         (session bluesky-feed-session)
+         (author (plist-get notification :author))
+         (actor (or (plist-get author :handle)
+                    (plist-get author :did)))
+         (subject (plist-get notification :reasonSubject)))
+    (delq nil
+          (list
+           (when actor
+             (cons (format "Author timeline: @%s"
+                           (or (plist-get author :handle) actor))
+                   (lambda ()
+                     (bluesky--open-author-timeline actor host session))))
+           (when subject
+             (cons (format "Thread: %s" subject)
+                   (lambda ()
+                     (bluesky--open-thread-uri subject host session))))))))
+
 (defun bluesky-open-current ()
   "Open a link, media URL, or author timeline from the selected post."
   (interactive nil bluesky-mode)
-  (let* ((post (or (bluesky--selected-post)
-                   (user-error "No post selected")))
-         (targets (bluesky--post-open-targets post)))
+  (let* ((post (bluesky--selected-post))
+         (notification (and (not post) (bluesky--selected-notification)))
+         (targets (if post
+                      (bluesky--post-open-targets post)
+                    (bluesky--notification-open-targets notification))))
     (unless targets
-      (user-error "Selected post has no links or media to open"))
+      (user-error "Selected item has no links or media to open"))
     (let* ((target (if (= (length targets) 1)
                        (car targets)
                      (let* ((choices (mapcar #'car targets))
@@ -799,6 +837,22 @@ heading and buffer label."
      session
      t)))
 
+(defun bluesky--open-notifications (host session &optional reasons title)
+  "Open notifications on HOST using SESSION.
+REASONS is a vector of notification reason strings.  TITLE customizes the
+rendered heading and buffer label."
+  (let ((handle (plist-get session :handle)))
+    (bluesky--mount-feed-buffer
+     (bluesky--notifications-buffer-name title)
+     (vui-component 'bluesky-notifications-view
+       :host host
+       :handle handle
+       :reasons reasons
+       :title (or title "Notifications"))
+     host
+     session
+     t)))
+
 (defun bluesky--discover-and-open-feed (input host session)
   "Discover a feed from INPUT on HOST using SESSION, then open it."
   (futur-bind
@@ -812,17 +866,15 @@ heading and buffer label."
               (bluesky--error-message err))
      (futur-failed err))))
 
-(defun bluesky-open-thread ()
-  "Open a thread view for the selected post."
-  (interactive nil bluesky-mode)
-  (let* ((post (or (bluesky--selected-post)
-                   (user-error "No post selected")))
-         (uri (or (plist-get post :uri)
-                  (user-error "Selected post does not have a URI")))
-         (host bluesky-host)
-         (session bluesky-feed-session)
-         (handle (plist-get session :handle))
-         (buffer-name (bluesky--thread-buffer-name post)))
+(defun bluesky--open-thread-uri (uri host session &optional post)
+  "Open a thread buffer for URI on HOST using SESSION.
+POST, when present, is used to build a friendlier buffer name."
+  (let* ((handle (plist-get session :handle))
+         (buffer-name (if post
+                          (bluesky--thread-buffer-name post)
+                        (format "*Bluesky Thread: %s*"
+                                (or (bluesky--clean-buffer-name-snippet uri)
+                                    "post")))))
     (let ((buffer (get-buffer-create buffer-name)))
       (with-current-buffer buffer
         (bluesky-mode))
@@ -841,6 +893,16 @@ heading and buffer label."
           (setq-local bluesky-feed-root root))
         (pop-to-buffer (vui-instance-buffer root))))))
 
+(defun bluesky-open-thread ()
+  "Open a thread view for the selected post or notification subject."
+  (interactive nil bluesky-mode)
+  (let* ((post (bluesky--selected-post))
+         (notification (and (not post) (bluesky--selected-notification)))
+         (uri (or (plist-get post :uri)
+                  (plist-get notification :reasonSubject)
+                  (user-error "Selected item does not have a post thread"))))
+    (bluesky--open-thread-uri uri bluesky-host bluesky-feed-session post)))
+
 (defun bluesky-activate-or-open-thread ()
   "Activate the widget at point, or open the selected post thread."
   (interactive nil bluesky-mode)
@@ -852,6 +914,40 @@ heading and buffer label."
   "Return post views from a feed RESPONSE."
   (mapcar (lambda (entry) (plist-get entry :post))
           (append (plist-get response :feed) nil)))
+
+(defun bluesky--post-record-notification-p (notification)
+  "Return non-nil when NOTIFICATION contains an app.bsky.feed.post record."
+  (equal (plist-get (plist-get notification :record) :$type)
+         "app.bsky.feed.post"))
+
+(defun bluesky--notification-post (notification)
+  "Return NOTIFICATION as a post-like app-view object, if possible."
+  (when (bluesky--post-record-notification-p notification)
+    (list :uri (plist-get notification :uri)
+          :cid (plist-get notification :cid)
+          :author (plist-get notification :author)
+          :record (plist-get notification :record)
+          :labels (plist-get notification :labels))))
+
+(defun bluesky--notification-item-id (notification)
+  "Return a stable item id for NOTIFICATION."
+  (string-join
+   (delq nil
+         (list (plist-get notification :uri)
+               (plist-get notification :cid)
+               (plist-get notification :reason)))
+   "#"))
+
+(defun bluesky--notification-items (notifications)
+  "Return navigable items for NOTIFICATIONS."
+  (mapcar (lambda (notification)
+            (let* ((id (bluesky--notification-item-id notification))
+                   (post (bluesky--notification-post notification)))
+              (list :id id
+                    :notification notification
+                    :post post
+                    :render t)))
+          notifications))
 
 (defun bluesky--render-paged-feed
     (host title empty-message fetch-key fetch-page page-posts posts cursor
@@ -924,6 +1020,85 @@ the next selected-post highlight should not move point."
                                     (plist-get item :post)
                                     (plist-get item :id)
                                     (plist-get item :depth)))
+                 (lambda (item) (plist-get item :id))
+                 :spacing 1)
+     (unless loading
+       (vui-text empty-message :face 'bluesky-muted)))
+   (when cursor
+     (vui-button "Load more"
+       :on-click (lambda ()
+                   (vui-set-state :extend-requested (current-time)))))))
+
+(defun bluesky--render-paged-notifications
+    (host title empty-message fetch-key fetch-page notifications cursor
+          loading error items selected-id refresh-requested extend-requested)
+  "Render paged Bluesky NOTIFICATIONS.
+HOST, TITLE, EMPTY-MESSAGE, FETCH-KEY, FETCH-PAGE, and the remaining arguments
+mirror `bluesky--render-paged-feed'."
+  (let ((current-items (bluesky--notification-items notifications)))
+    (vui-use-effect (notifications selected-id)
+      (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
+        (vui-batch
+         (vui-set-state :items current-items)
+         (when (and ids (not (member selected-id ids)))
+           (vui-set-state :selected-id (car ids)))))
+      nil))
+  (vui-use-effect (selected-id items)
+    (bluesky--schedule-highlight
+     selected-id
+     bluesky--selection-from-point-preserve-next-highlight)
+    (setq bluesky--selection-from-point-preserve-next-highlight nil)
+    nil)
+  (vui-use-effect (fetch-key refresh-requested)
+    (vui-batch
+     (vui-set-state :loading t)
+     (vui-set-state :error nil))
+    (bluesky--future-set-state
+     (funcall fetch-page nil)
+     :notifications
+     (lambda (response)
+       (vui-batch
+        (vui-set-state :cursor (plist-get response :cursor)))
+       (append (plist-get response :notifications) nil))
+     :error)
+    nil)
+  (vui-use-effect (extend-requested)
+    (when (and extend-requested cursor (not loading))
+      (vui-batch
+       (vui-set-state :loading t)
+       (vui-set-state :error nil))
+      (bluesky--future-set-state
+       (funcall fetch-page cursor)
+       :notifications
+       (lambda (response)
+         (vui-batch
+          (vui-set-state :cursor (plist-get response :cursor)))
+         (append notifications
+                 (append (plist-get response :notifications) nil)))
+       :error))
+    nil)
+  (vui-vstack
+   (vui-hstack
+    (vui-text title :face 'bluesky-heading)
+    (vui-button "Refresh"
+      :on-click (lambda ()
+                  (vui-set-state :refresh-requested (current-time)))))
+   (when error
+     (vui-text (bluesky--error-message error) :face 'bluesky-error))
+   (when loading
+     (vui-text "Loading..." :face 'bluesky-muted))
+   (if items
+       (vui-list items
+                 (lambda (item)
+                   (let ((notification (plist-get item :notification)))
+                     (vui-vstack
+                      (bluesky-ui-notification host
+                                               notification
+                                               (plist-get item :id))
+                      (when-let* ((post (plist-get item :post)))
+                        (bluesky-ui-post host
+                                         post
+                                         (plist-get item :id))))))
                  (lambda (item) (plist-get item :id))
                  :spacing 1)
      (unless loading
@@ -1021,6 +1196,27 @@ the next selected-post highlight should not move point."
      (bluesky-conn-get-feed host handle feed cursor 50))
    #'bluesky--feed-response-posts
    posts cursor loading error items selected-id refresh-requested
+   extend-requested))
+
+(vui-defcomponent bluesky-notifications-view (host handle reasons title)
+  "Render Bluesky notifications for HANDLE."
+  :state ((notifications nil)
+          (cursor nil)
+          (loading nil)
+          (error nil)
+          (items nil)
+          (selected-id nil)
+          (refresh-requested nil)
+          (extend-requested nil))
+  :render
+  (bluesky--render-paged-notifications
+   host
+   (format "%s for %s" title handle)
+   "No notifications loaded."
+   (list 'notifications host handle reasons)
+   (lambda (cursor)
+     (bluesky-conn-list-notifications host handle cursor 50 reasons))
+   notifications cursor loading error items selected-id refresh-requested
    extend-requested))
 
 (vui-defcomponent bluesky-thread (host handle uri)
@@ -1180,6 +1376,43 @@ empty string to discover popular feeds.  USERNAME, PASSWORD, and HOST mirror
      username
      password
      host)))
+
+;;;###autoload
+(defun bluesky-notifications (&optional username password host)
+  "Open notifications for the authenticated account.
+USERNAME, PASSWORD, and HOST mirror `bluesky'."
+  (interactive)
+  (bluesky--with-session
+   (lambda (host session)
+     (bluesky--open-notifications host session))
+   username
+   password
+   host))
+
+;;;###autoload
+(defun bluesky-likes (&optional username password host)
+  "Open like notifications for the authenticated account.
+USERNAME, PASSWORD, and HOST mirror `bluesky'."
+  (interactive)
+  (bluesky--with-session
+   (lambda (host session)
+     (bluesky--open-notifications
+      host session (vector "like" "like-via-repost") "Likes"))
+   username
+   password
+   host))
+
+;;;###autoload
+(defun bluesky-replies (&optional username password host)
+  "Open reply notifications for the authenticated account.
+USERNAME, PASSWORD, and HOST mirror `bluesky'."
+  (interactive)
+  (bluesky--with-session
+   (lambda (host session)
+     (bluesky--open-notifications host session (vector "reply") "Replies"))
+   username
+   password
+   host))
 
 ;;;###autoload
 (defun bluesky (&optional username password host)
