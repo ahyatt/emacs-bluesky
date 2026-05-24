@@ -202,20 +202,39 @@ objects seen for those identifiers.")
                bluesky-known-authors))
     (sort actors #'string-lessp)))
 
+(defun bluesky--known-author-label (actor author)
+  "Return a completion label for ACTOR using AUTHOR."
+  (let ((name (string-trim (or (plist-get author :displayName) ""))))
+    (if (string-empty-p name)
+        actor
+      (format "%s (%s)" name actor))))
+
+(defun bluesky--known-author-choices ()
+  "Return completion choices for known authors as (LABEL . ACTOR)."
+  (let (choices)
+    (when (hash-table-p bluesky-known-authors)
+      (maphash
+       (lambda (actor author)
+         (push (cons (bluesky--known-author-label actor author) actor)
+               choices))
+       bluesky-known-authors))
+    (sort choices (lambda (a b) (string-lessp (car a) (car b))))))
+
 (defun bluesky--read-known-author (prompt default)
   "Read an author using PROMPT, DEFAULT, and known author completion."
-  (let* ((actors (bluesky--known-author-actors))
+  (let* ((choices (bluesky--known-author-choices))
          (input (completing-read
                  (if default
                      (format "%s (default %s): " prompt default)
                    (format "%s: " prompt))
-                 actors
+                 choices
                  nil
                  nil
                  nil
                  nil
                  default)))
-    (bluesky--normalize-actor input)))
+    (bluesky--normalize-actor (or (cdr (assoc input choices))
+                                  input))))
 
 (defun bluesky--future-set-state (future state-key value-fn error-key)
   "Set VUI STATE-KEY from FUTURE using VALUE-FN, or ERROR-KEY on failure."
