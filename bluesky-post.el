@@ -28,6 +28,7 @@
 (require 'bluesky-conn)
 (require 'cl-lib)
 (require 'futur)
+(require 'mailcap)
 (require 'subr-x)
 
 (defgroup bluesky nil
@@ -57,6 +58,8 @@
 (define-key bluesky-post-mode-map (kbd "C-c C-f") #'bluesky-post-cycle-format)
 (define-key bluesky-post-mode-map (kbd "C-c C-r") #'bluesky-post-cycle-reply-policy)
 (define-key bluesky-post-mode-map (kbd "C-c C-e") #'bluesky-post-toggle-embedding)
+(define-key bluesky-post-mode-map (kbd "C-c C-a") #'bluesky-post-add-media)
+(define-key bluesky-post-mode-map (kbd "C-c C-d") #'bluesky-post-clear-media)
 
 (defvar-local bluesky-post-host nil
   "Host used by the current compose buffer.")
@@ -85,6 +88,9 @@
 (defvar-local bluesky-post-allow-embedding t
   "Non-nil when the post may be embedded by other posts.")
 
+(defvar-local bluesky-post-media nil
+  "Media attachments for the current compose buffer.")
+
 (defvar-local bluesky-post-submitting nil
   "Non-nil while the compose buffer is submitting.")
 
@@ -93,6 +99,12 @@
 
 (defconst bluesky-post--reply-policies '(everyone mentions following followers nobody)
   "Supported reply policies for new posts.")
+
+(defconst bluesky-post--image-size-limit 2000000
+  "Maximum image blob size accepted by app.bsky.embed.images.")
+
+(defconst bluesky-post--video-size-limit 100000000
+  "Maximum video blob size accepted by app.bsky.embed.video.")
 
 (define-derived-mode bluesky-post-mode text-mode "Bluesky-Post"
   "Major mode for composing Bluesky posts.
@@ -181,6 +193,7 @@ Use \\<bluesky-post-mode-map>\\[bluesky-post-submit] to submit and
          (chars (bluesky-post--character-count text))
          (bytes (bluesky-post--byte-count text))
          (over (bluesky-post--over-limit-p text))
+         (media (bluesky-post--media-summary))
          (count (format "%d/%d chars %d/%d bytes"
                         chars bluesky-post-character-limit
                         bytes bluesky-post-byte-limit))
@@ -188,13 +201,14 @@ Use \\<bluesky-post-mode-map>\\[bluesky-post-submit] to submit and
          (status (cond
                   (bluesky-post-submitting "Submitting")
                   (over "Too long")
-                  ((string-empty-p text) "Empty")
+                  ((and (string-empty-p text) (not bluesky-post-media)) "Empty")
                   (t "Ready"))))
     (concat
      "C-c C-c Post  C-c C-k Cancel  "
      "C-c C-f Format:" (bluesky-post--format-label bluesky-post-source-format)
      "  C-c C-r Replies:" (bluesky-post--format-label bluesky-post-reply-policy)
      "  C-c C-e Embeds:" (if bluesky-post-allow-embedding "On" "Off")
+     "  C-c C-a Media:" media
      "  "
      (propertize count 'face count-face)
      "  "
@@ -235,6 +249,101 @@ Use \\<bluesky-post-mode-map>\\[bluesky-post-submit] to submit and
   (setq bluesky-post-allow-embedding (not bluesky-post-allow-embedding))
   (force-mode-line-update)
   (message "Bluesky embeds: %s" (if bluesky-post-allow-embedding "on" "off")))
+
+(defun bluesky-post--media-summary ()
+  "Return a short summary of media attachments."
+  (if bluesky-post-media
+      (pcase (plist-get (car bluesky-post-media) :kind)
+        ('image (format "%d image%s"
+                        (length bluesky-post-media)
+                        (if (= (length bluesky-post-media) 1) "" "s")))
+        ('video "1 video")
+        (_ "Attached"))
+    "None"))
+
+(defun bluesky-post--file-size (file)
+  "Return FILE size in bytes."
+  (file-attribute-size (file-attributes file)))
+
+(defun bluesky-post--mime-type (file)
+  "Return FILE's MIME type."
+  (or (mailcap-file-name-to-mime-type file)
+      "application/octet-stream"))
+
+(defun bluesky-post--media-kind (mime-type)
+  "Return the Bluesky media kind for MIME-TYPE."
+  (cond
+   ((string-prefix-p "image/" mime-type) 'image)
+   ((equal mime-type "video/mp4") 'video)
+   (t nil)))
+
+(defun bluesky-post--image-aspect-ratio (file)
+  "Return app.bsky.embed.defs aspectRatio for image FILE, if available."
+  (when-let* ((size (ignore-errors
+                      (image-size (create-image file) t)))
+              (width (car size))
+              (height (cdr size)))
+    (when (and (integerp width) (integerp height) (> width 0) (> height 0))
+      (list :width width :height height))))
+
+(defun bluesky-post--validate-new-media (kind file mime-type)
+  "Signal a user error unless KIND FILE MIME-TYPE can be attached."
+  (let ((size (bluesky-post--file-size file)))
+    (pcase kind
+      ('image
+       (when (and bluesky-post-media
+                  (not (eq (plist-get (car bluesky-post-media) :kind) 'image)))
+         (user-error "Cannot mix images and video in one Bluesky post"))
+       (when (>= (length bluesky-post-media) 4)
+         (user-error "Bluesky image posts can include at most 4 images"))
+       (when (> size bluesky-post--image-size-limit)
+         (user-error "Image exceeds Bluesky's 2 MB image limit")))
+      ('video
+       (when bluesky-post-media
+         (user-error "Bluesky video posts can include only one video and no images"))
+       (unless (equal mime-type "video/mp4")
+         (user-error "Bluesky video embeds require an MP4 file"))
+       (when (> size bluesky-post--video-size-limit)
+         (user-error "Video exceeds Bluesky's 100 MB video limit")))
+      (_
+       (user-error "Unsupported media type: %s" mime-type)))))
+
+(defun bluesky-post-add-media (file alt)
+  "Attach media FILE with ALT text to the current post."
+  (interactive
+   (let* ((file (read-file-name "Attach media: " nil nil t))
+          (mime-type (bluesky-post--mime-type file))
+          (kind (bluesky-post--media-kind mime-type)))
+     (unless kind
+       (user-error "Unsupported media type: %s" mime-type))
+     (list file
+           (read-string
+            (if (eq kind 'image) "Alt text: " "Video alt text: "))))
+   bluesky-post-mode)
+  (let* ((file (expand-file-name file))
+         (mime-type (bluesky-post--mime-type file))
+         (kind (bluesky-post--media-kind mime-type)))
+    (unless (file-readable-p file)
+      (user-error "File is not readable: %s" file))
+    (bluesky-post--validate-new-media kind file mime-type)
+    (setq bluesky-post-media
+          (append bluesky-post-media
+                  (list (append (list :kind kind
+                                      :file file
+                                      :mime-type mime-type
+                                      :alt alt)
+                                (when (eq kind 'image)
+                                  (list :aspectRatio
+                                        (bluesky-post--image-aspect-ratio file)))))))
+    (force-mode-line-update)
+    (message "Bluesky media: %s" (bluesky-post--media-summary))))
+
+(defun bluesky-post-clear-media ()
+  "Remove all media attachments from the current post."
+  (interactive nil bluesky-post-mode)
+  (setq bluesky-post-media nil)
+  (force-mode-line-update)
+  (message "Bluesky media cleared"))
 
 (defun bluesky-post--utf-8-bytes (text)
   "Return the UTF-8 byte length of TEXT."
@@ -395,6 +504,49 @@ for the link URI.  Return a plist with :text and :facets."
   (unless allow-embedding
     (vector (list :$type "app.bsky.feed.postgate#disableRule"))))
 
+(defun bluesky-post--uploaded-image (media blob)
+  "Return an app.bsky.embed.images image item for MEDIA and uploaded BLOB."
+  (append (list :image blob
+                :alt (or (plist-get media :alt) ""))
+          (when-let* ((aspect-ratio (plist-get media :aspectRatio)))
+            (list :aspectRatio aspect-ratio))))
+
+(defun bluesky-post--uploaded-video (media blob)
+  "Return an app.bsky.embed.video record for MEDIA and uploaded BLOB."
+  (append (list :$type "app.bsky.embed.video"
+                :video blob)
+          (when-let* ((alt (plist-get media :alt)))
+            (unless (string-empty-p alt)
+              (list :alt alt)))
+          (when-let* ((aspect-ratio (plist-get media :aspectRatio)))
+            (list :aspectRatio aspect-ratio))))
+
+(defun bluesky-post--uploaded-media-embed (media blobs)
+  "Return an app.bsky embed for MEDIA using uploaded BLOBS."
+  (when media
+    (pcase (plist-get (car media) :kind)
+      ('image
+       (list :$type "app.bsky.embed.images"
+             :images (vconcat (cl-mapcar #'bluesky-post--uploaded-image
+                                          media blobs))))
+      ('video
+       (bluesky-post--uploaded-video (car media) (car blobs))))))
+
+(defun bluesky-post--upload-media-future (host handle media)
+  "Return a future resolving to an embed after uploading MEDIA."
+  (if media
+      (futur-bind
+       (apply #'futur-list
+              (mapcar (lambda (item)
+                        (bluesky-conn-upload-blob
+                         host handle
+                         (plist-get item :file)
+                         (plist-get item :mime-type)))
+                      media))
+       (lambda (blobs)
+         (bluesky-post--uploaded-media-embed media blobs)))
+    (futur-done nil)))
+
 (defun bluesky-post--refresh-source-buffer (buffer)
   "Refresh Bluesky source BUFFER, when possible."
   (when (buffer-live-p buffer)
@@ -440,18 +592,19 @@ threadgate allow rules.  ALLOW-EMBEDDING is passed through to postgate handling.
          (facets (plist-get rich :facets))
          (reply (and bluesky-post-reply-to
                      (bluesky-post--reply-ref bluesky-post-reply-to)))
-         (record (bluesky-conn-record text nil facets reply))
          (host bluesky-post-host)
          (handle (plist-get bluesky-post-session :handle))
          (reply-policy bluesky-post-reply-policy)
-         (allow-embedding bluesky-post-allow-embedding))
-    (futur-bind
-     (bluesky-conn-create-post host handle
-                               "app.bsky.feed.post"
-                               record)
-     (lambda (created)
-       (bluesky-post--create-threadgate-if-needed
-        created host handle reply-policy allow-embedding)))))
+         (allow-embedding bluesky-post-allow-embedding)
+         (media bluesky-post-media))
+    (futur-let* ((embed <- (bluesky-post--upload-media-future
+                            host handle media))
+                 (created <- (bluesky-conn-create-post
+                              host handle
+                              "app.bsky.feed.post"
+                              (bluesky-conn-record text nil facets reply embed))))
+      (bluesky-post--create-threadgate-if-needed
+       created host handle reply-policy allow-embedding))))
 
 (defun bluesky-post-submit ()
   "Submit the current Bluesky post."
@@ -460,8 +613,8 @@ threadgate allow rules.  ALLOW-EMBEDDING is passed through to postgate handling.
     (cond
      (bluesky-post-submitting
       (user-error "Already submitting"))
-     ((string-blank-p text)
-      (user-error "Cannot post empty text"))
+     ((and (string-blank-p text) (not bluesky-post-media))
+      (user-error "Cannot post empty text without media"))
      ((bluesky-post--over-limit-p text)
       (user-error "Post exceeds Bluesky length limits"))
      ((and bluesky-post-reply-to
