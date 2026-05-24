@@ -193,28 +193,20 @@ auth refreshes.  Return a `futur'."
                (apply #'bluesky-conn-call-authed host handle http-method method args))
            (futur-failed err)))))))
 
-(defun bluesky-conn--binary-file-contents (file)
-  "Return FILE contents as an unibyte string."
-  (with-temp-buffer
-    (set-buffer-multibyte nil)
-    (let ((coding-system-for-read 'binary))
-      (insert-file-contents-literally file))
-    (buffer-string)))
-
 (defun bluesky-conn--upload-blob-with-token (host access-jwt file mime-type)
   "Upload FILE with MIME-TYPE to HOST using ACCESS-JWT.
 Return a future resolving to the `com.atproto.repo.uploadBlob' response."
   (let ((url (format "https://%s/xrpc/com.atproto.repo.uploadBlob" host))
         (headers `(("Authorization" . ,(format "Bearer %s" access-jwt))
-                   ("Content-Type" . ,mime-type)))
-        (body (bluesky-conn--binary-file-contents file)))
+                   ("Content-Type" . ,mime-type))))
     (futur-new
      (lambda (futur)
        (condition-case err
            (plz 'post url
              :as #'bluesky-conn-json-read
              :headers headers
-             :body body
+             :body `(file ,file)
+             :body-type 'binary
              :then (lambda (resp)
                      (futur-deliver-value futur resp))
              :else (lambda (resp)

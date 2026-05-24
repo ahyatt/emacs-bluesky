@@ -75,6 +75,22 @@
     (should (equal (plist-get (plist-get record :embed) :$type)
                    "app.bsky.embed.images"))))
 
+(ert-deftest bluesky-conn-upload-blob-passes-file-to-plz ()
+  (let (plz-args)
+    (cl-letf (((symbol-function 'plz)
+               (lambda (&rest args)
+                 (setq plz-args args)
+                 (funcall (plist-get args :then)
+                          (list :blob (list :ref "uploaded"))))))
+      (should (equal
+               (futur-blocking-wait-to-get-result
+                (bluesky-conn--upload-blob-with-token
+                 "bsky.social" "token" "/tmp/image.png" "image/png"))
+               (list :blob (list :ref "uploaded"))))
+      (should (equal (plist-get plz-args :body)
+                     '(file "/tmp/image.png")))
+      (should (equal (plist-get plz-args :body-type) 'binary)))))
+
 (provide 'bluesky-conn-test)
 
 ;;; bluesky-conn-test.el ends here
