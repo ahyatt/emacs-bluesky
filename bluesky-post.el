@@ -330,6 +330,8 @@ Use \\<bluesky-post-mode-map>\\[bluesky-post-submit] to submit and
          (kind (bluesky-post--media-kind mime-type)))
     (unless (file-readable-p file)
       (user-error "File is not readable: %s" file))
+    (unless (file-regular-p file)
+      (user-error "Attachment must be a regular file: %s" file))
     (bluesky-post--validate-new-media kind file mime-type)
     (setq bluesky-post-media
           (append bluesky-post-media
