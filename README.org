@@ -1,12 +1,8 @@
 # A Bluesky client for Emacs
 
-This repository hosts a Bluesky client for Emacs.
+This is a Bluesky client for Emacs, capable of reading feeds, responding, posting, and most other functionality that is needed to have a complete Bluesky experience.
 
 [[file:screenshots/bluesky-screenshot.png]]
-
-It is still under development and has not yet been submitted to any package
-archive.  The interface and storage details may change, although the intent is
-to release it eventually.
 
 * Installation
 
