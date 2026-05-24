@@ -70,3 +70,5 @@ Compose buffers use =bluesky-post-mode=:
 
 - =C-c C-c= submits the post or reply.
 - =C-c C-k= cancels the compose buffer.
+- =C-c C-a= attaches an image or MP4 video.
+- =C-c C-d= clears attached media.

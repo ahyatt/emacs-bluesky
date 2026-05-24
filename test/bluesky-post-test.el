@@ -92,10 +92,45 @@
            (feature (bluesky-post-test--facet-feature facet)))
       (should (equal (plist-get feature :tag) "#topic")))))
 
+(ert-deftest bluesky-post-media-embed-builds-images ()
+  (let* ((blob-a (list :$type "blob" :ref "a" :mimeType "image/png" :size 10))
+         (blob-b (list :$type "blob" :ref "b" :mimeType "image/png" :size 20))
+         (media (list (list :kind 'image :alt "first" :aspectRatio
+                            (list :width 10 :height 5))
+                      (list :kind 'image :alt "second")))
+         (embed (bluesky-post--uploaded-media-embed media
+                                                    (list blob-a blob-b)))
+         (images (plist-get embed :images)))
+    (should (equal (plist-get embed :$type) "app.bsky.embed.images"))
+    (should (= (length images) 2))
+    (should (equal (plist-get (aref images 0) :image) blob-a))
+    (should (equal (plist-get (aref images 0) :alt) "first"))
+    (should (equal (plist-get (aref images 0) :aspectRatio)
+                   (list :width 10 :height 5)))
+    (should (equal (plist-get (aref images 1) :image) blob-b))))
+
+(ert-deftest bluesky-post-media-embed-builds-video ()
+  (let* ((blob (list :$type "blob" :ref "video" :mimeType "video/mp4" :size 10))
+         (media (list (list :kind 'video :alt "clip")))
+         (embed (bluesky-post--uploaded-media-embed media (list blob))))
+    (should (equal (plist-get embed :$type) "app.bsky.embed.video"))
+    (should (equal (plist-get embed :video) blob))
+    (should (equal (plist-get embed :alt) "clip"))))
+
+(ert-deftest bluesky-post-image-aspect-ratio-is-best-effort ()
+  (let ((original-fboundp (symbol-function 'fboundp)))
+    (cl-letf (((symbol-function 'fboundp)
+               (lambda (symbol)
+                 (and (not (eq symbol 'image-size))
+                      (funcall original-fboundp symbol)))))
+      (should-not (bluesky-post--image-aspect-ratio "/tmp/image.png")))))
+
 (ert-deftest bluesky-post-commands-are-mode-scoped ()
   (dolist (command '(bluesky-post-cycle-format
                      bluesky-post-cycle-reply-policy
                      bluesky-post-toggle-embedding
+                     bluesky-post-add-media
+                     bluesky-post-clear-media
                      bluesky-post-submit
                      bluesky-post-cancel))
     (should (equal (command-modes command) '(bluesky-post-mode)))))

@@ -193,6 +193,58 @@ auth refreshes.  Return a `futur'."
                (apply #'bluesky-conn-call-authed host handle http-method method args))
            (futur-failed err)))))))
 
+(defun bluesky-conn--upload-blob-with-token (host access-jwt file mime-type)
+  "Upload FILE with MIME-TYPE to HOST using ACCESS-JWT.
+Return a future resolving to the `com.atproto.repo.uploadBlob' response."
+  (let ((url (format "https://%s/xrpc/com.atproto.repo.uploadBlob" host))
+        (headers `(("Authorization" . ,(format "Bearer %s" access-jwt))
+                   ("Content-Type" . ,mime-type))))
+    (futur-new
+     (lambda (futur)
+       (condition-case err
+           (plz 'post url
+             :as #'bluesky-conn-json-read
+             :headers headers
+             :body `(file ,file)
+             :body-type 'binary
+             :then (lambda (resp)
+                     (futur-deliver-value futur resp))
+             :else (lambda (resp)
+                     (futur-deliver-failure
+                      futur
+                      (list 'bluesky-api-error
+                            (bluesky-conn--parse-plz-error resp)))))
+         (plz-error
+          (futur-deliver-failure
+           futur
+           (list 'bluesky-api-error
+                 (bluesky-conn--parse-plz-error (nth 2 err)))))
+         (error
+          (futur-deliver-failure futur err)))
+       nil))))
+
+(defun bluesky-conn-upload-blob (host handle file mime-type)
+  "Upload FILE as MIME-TYPE using HANDLE at HOST.
+Return a future resolving to the uploaded blob object."
+  (let ((session (alist-get (format "%s/%s" host handle)
+                            bluesky-session
+                            nil nil #'equal)))
+    (unless session
+      (error "Unable to get the Bluesky authentication token, you may need to log in first"))
+    (futur-bind
+     (bluesky-conn--upload-blob-with-token host
+                                           (plist-get session :accessJwt)
+                                           file
+                                           mime-type)
+     (lambda (result)
+       (plist-get result :blob))
+     (lambda (err)
+       (let ((api-error (bluesky-conn--api-error-json err)))
+         (if (equal "ExpiredToken" (plist-get api-error :error))
+             (futur-let* ((_ <- (bluesky-conn-refresh-session host handle)))
+               (bluesky-conn-upload-blob host handle file mime-type))
+           (futur-failed err)))))))
+
 (defun bluesky-conn-create-session (host handle password)
   "Create a session with the Bluesky API at HOST using HANDLE and PASSWORD.
 HANDLE is the user's handle on the Bluesky instance at HOST (without any
@@ -273,13 +325,15 @@ COLLECTION is the collection to post to, and RECORD is the record, created by
   "Return the current time as an AT Protocol datetime in UTC."
   (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
 
-(defun bluesky-conn-record (text langs facets &optional reply)
+(defun bluesky-conn-record (text langs facets &optional reply embed)
   "Return an app.bsky.feed.post record for TEXT.
-LANGS and FACETS are optional post metadata.  REPLY is a reply ref plist."
+LANGS and FACETS are optional post metadata.  REPLY is a reply ref plist.
+EMBED is an optional app.bsky post embed record."
   (append `(:text ,text :createdAt ,(bluesky-conn--created-at))
           (when langs `(:langs ,langs))
           (when facets `(:facets ,facets))
-          (when reply `(:reply ,reply))))
+          (when reply `(:reply ,reply))
+          (when embed `(:embed ,embed))))
 
 (defun bluesky-conn-create-like (host handle post)
   "Like POST using HANDLE at HOST."
