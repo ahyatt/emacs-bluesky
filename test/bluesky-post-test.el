@@ -117,6 +117,14 @@
     (should (equal (plist-get embed :video) blob))
     (should (equal (plist-get embed :alt) "clip"))))
 
+(ert-deftest bluesky-post-image-aspect-ratio-is-best-effort ()
+  (let ((original-fboundp (symbol-function 'fboundp)))
+    (cl-letf (((symbol-function 'fboundp)
+               (lambda (symbol)
+                 (and (not (eq symbol 'image-size))
+                      (funcall original-fboundp symbol)))))
+      (should-not (bluesky-post--image-aspect-ratio "/tmp/image.png")))))
+
 (ert-deftest bluesky-post-commands-are-mode-scoped ()
   (dolist (command '(bluesky-post-cycle-format
                      bluesky-post-cycle-reply-policy

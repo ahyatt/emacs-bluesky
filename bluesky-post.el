@@ -282,7 +282,9 @@ Use \\<bluesky-post-mode-map>\\[bluesky-post-submit] to submit and
 
 (defun bluesky-post--image-aspect-ratio (file)
   "Return app.bsky.embed.defs aspectRatio for image FILE, if available."
-  (when-let* ((size (ignore-errors
+  (when-let* (((fboundp 'create-image))
+              ((fboundp 'image-size))
+              (size (ignore-errors
                       (image-size (create-image file) t)))
               (width (car size))
               (height (cdr size)))
