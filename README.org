@@ -60,6 +60,12 @@ This opens the timeline buffer.  In =bluesky-mode=:
 - =R= toggles repost.
 - =b= toggles bookmark.
 
+Other feed-like views:
+
+- =M-x bluesky-notifications= opens account notifications.
+- =M-x bluesky-likes= opens like notifications.
+- =M-x bluesky-replies= opens reply notifications.
+
 Compose buffers use =bluesky-post-mode=:
 
 - =C-c C-c= submits the post or reply.
