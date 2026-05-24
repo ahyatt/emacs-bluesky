@@ -165,6 +165,58 @@
 (defvar-local bluesky--selection-from-point-preserve-next-highlight nil
   "Non-nil when the next selection highlight should preserve point.")
 
+(defvar bluesky-known-authors nil
+  "Hash table of author identifiers seen in Bluesky app-view records.
+Keys are actor identifiers suitable for `app.bsky.feed.getAuthorFeed', normally
+handles and falling back to DIDs.  Values are the most recent author app-view
+objects seen for those identifiers.")
+
+(defun bluesky--known-authors-table ()
+  "Return the known authors table, creating it if needed."
+  (unless (hash-table-p bluesky-known-authors)
+    (setq bluesky-known-authors (make-hash-table :test #'equal)))
+  bluesky-known-authors)
+
+(defun bluesky--author-actor (author)
+  "Return the best AT actor identifier for AUTHOR."
+  (when author
+    (or (plist-get author :handle)
+        (plist-get author :did))))
+
+(defun bluesky--remember-author (author)
+  "Remember AUTHOR for later completion."
+  (when-let* ((actor (bluesky--author-actor author)))
+    (puthash actor author (bluesky--known-authors-table))))
+
+(defun bluesky--remember-post-authors (posts)
+  "Remember authors from POSTS and their embedded quote posts."
+  (dolist (item (bluesky-model-flatten-posts posts))
+    (bluesky--remember-author (plist-get (plist-get item :post) :author))))
+
+(defun bluesky--known-author-actors ()
+  "Return known author identifiers sorted for completion."
+  (let (actors)
+    (when (hash-table-p bluesky-known-authors)
+      (maphash (lambda (actor _author)
+                 (push actor actors))
+               bluesky-known-authors))
+    (sort actors #'string-lessp)))
+
+(defun bluesky--read-known-author (prompt default)
+  "Read an author using PROMPT, DEFAULT, and known author completion."
+  (let* ((actors (bluesky--known-author-actors))
+         (input (completing-read
+                 (if default
+                     (format "%s (default %s): " prompt default)
+                   (format "%s: " prompt))
+                 actors
+                 nil
+                 nil
+                 nil
+                 nil
+                 default)))
+    (bluesky--normalize-actor input)))
+
 (defun bluesky--future-set-state (future state-key value-fn error-key)
   "Set VUI STATE-KEY from FUTURE using VALUE-FN, or ERROR-KEY on failure."
   (futur-bind
@@ -253,9 +305,7 @@
 
 (defun bluesky--post-author-actor (post)
   "Return the best AT identifier for POST's author."
-  (when-let* ((author (plist-get post :author)))
-    (or (plist-get author :handle)
-        (plist-get author :did))))
+  (bluesky--author-actor (plist-get post :author)))
 
 (defun bluesky--selected-author-actor ()
   "Return the selected post author's AT identifier, if available."
@@ -266,13 +316,8 @@
 (defun bluesky--read-actor (&optional prompt)
   "Read an AT actor identifier with PROMPT."
   (let* ((default (bluesky--selected-author-actor))
-         (prompt (or prompt "Actor"))
-         (input (read-string
-                 (if default
-                     (format "%s (default %s): " prompt default)
-                   (format "%s: " prompt))
-                 nil nil default)))
-    (bluesky--normalize-actor input)))
+         (prompt (or prompt "Actor")))
+    (bluesky--read-known-author prompt default)))
 
 (defun bluesky--author-timeline-buffer-name (actor)
   "Return an author timeline buffer name for ACTOR."
@@ -964,6 +1009,9 @@ cursor.  LOADING, ERROR, ITEMS, SELECTED-ID, REFRESH-REQUESTED, and
 EXTEND-REQUESTED are VUI state values.  PRESERVE-NEXT-HIGHLIGHT non-nil means
 the next selected-post highlight should not move point."
   (let ((current-items (bluesky-model-flatten-posts posts 0 t)))
+    (vui-use-effect (posts)
+      (bluesky--remember-post-authors posts)
+      nil)
     (vui-use-effect (posts selected-id)
       (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
         (vui-batch
@@ -1036,6 +1084,10 @@ the next selected-post highlight should not move point."
 HOST, TITLE, EMPTY-MESSAGE, FETCH-KEY, FETCH-PAGE, and the remaining arguments
 mirror `bluesky--render-paged-feed'."
   (let ((current-items (bluesky--notification-items notifications)))
+    (vui-use-effect (notifications)
+      (dolist (notification notifications)
+        (bluesky--remember-author (plist-get notification :author)))
+      nil)
     (vui-use-effect (notifications selected-id)
       (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
         (vui-batch
@@ -1230,6 +1282,10 @@ mirror `bluesky--render-paged-feed'."
   :render
   (progn
     (let ((current-items (and thread (bluesky-model-thread-items thread))))
+      (vui-use-effect (thread)
+        (dolist (item current-items)
+          (bluesky--remember-author (plist-get (plist-get item :post) :author)))
+        nil)
       (vui-use-effect (thread selected-id)
         (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
           (vui-batch
@@ -1302,6 +1358,7 @@ USERNAME, PASSWORD, and HOST mirror `bluesky'."
          (bluesky-conn-create-session host username password))
      (lambda (session)
        (message "Bluesky: connected as %s" (plist-get session :handle))
+       (bluesky--remember-author session)
        (funcall callback host session))
      (lambda (err)
        (message "Unable to connect to Bluesky: %s"
@@ -1314,11 +1371,13 @@ USERNAME, PASSWORD, and HOST are optional login details."
   (if (and (not username)
            (not password)
            (bound-and-true-p bluesky-feed-session))
-      (funcall callback
-               (or host
-                   (and (boundp 'bluesky-host) bluesky-host)
-                   bluesky-default-host)
-               bluesky-feed-session)
+      (progn
+        (bluesky--remember-author bluesky-feed-session)
+        (funcall callback
+                 (or host
+                     (and (boundp 'bluesky-host) bluesky-host)
+                     bluesky-default-host)
+                 bluesky-feed-session))
     (bluesky--authenticate callback username password host)))
 
 ;;;###autoload

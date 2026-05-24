@@ -87,6 +87,37 @@
                      bluesky-compose-post))
     (should-not (command-modes command))))
 
+(ert-deftest bluesky-remembers-post-authors-for-completion ()
+  (let ((bluesky-known-authors nil))
+    (bluesky--remember-post-authors
+     (list (list :author (list :handle "author.test"
+                               :did "did:plc:author")
+                 :embed
+                 (list :record
+                       (list :author (list :handle "quoted.test"
+                                           :did "did:plc:quoted")
+                             :value (list :text "quoted"))))))
+    (should (equal (bluesky--known-author-actors)
+                   '("author.test" "quoted.test")))))
+
+(ert-deftest bluesky-read-actor-completes-known-authors ()
+  (let ((bluesky-known-authors nil)
+        read-args)
+    (bluesky--remember-author (list :handle "author.test"))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest args)
+                 (setq read-args args)
+                 "author.test")))
+      (should (equal (bluesky--read-actor) "author.test")))
+    (should (equal (nth 1 read-args) '("author.test")))))
+
+(ert-deftest bluesky-read-actor-strips-leading-at-from-completion-input ()
+  (let ((bluesky-known-authors nil))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _args)
+                 "@author.test")))
+      (should (equal (bluesky--read-actor) "author.test")))))
+
 (provide 'bluesky-test)
 
 ;;; bluesky-test.el ends here
