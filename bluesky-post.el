@@ -48,6 +48,10 @@
   :type 'integer
   :group 'bluesky)
 
+(define-error 'bluesky-post-text-too-long
+  "Post exceeds Bluesky length limits"
+  'user-error)
+
 (defface bluesky-post-context
   '((t :inherit shadow))
   "Face for the post context shown in compose buffers.")
@@ -189,6 +193,21 @@ Use \\<bluesky-post-mode-map>\\[bluesky-post-submit] to submit and
   (let ((text (or text (bluesky-post--content-string))))
     (or (> (bluesky-post--character-count text) bluesky-post-character-limit)
         (> (bluesky-post--byte-count text) bluesky-post-byte-limit))))
+
+(defun bluesky-post--check-length (text)
+  "Signal `bluesky-post-text-too-long' when TEXT exceeds post limits."
+  (let ((chars (bluesky-post--character-count text))
+        (bytes (bluesky-post--byte-count text)))
+    (when (or (> chars bluesky-post-character-limit)
+              (> bytes bluesky-post-byte-limit))
+      (signal 'bluesky-post-text-too-long
+              (list (format "Post exceeds Bluesky length limits: %d/%d chars, %d/%d bytes"
+                            chars bluesky-post-character-limit
+                            bytes bluesky-post-byte-limit)
+                    :characters chars
+                    :character-limit bluesky-post-character-limit
+                    :bytes bytes
+                    :byte-limit bluesky-post-byte-limit)))))
 
 (defun bluesky-post--header-line ()
   "Return the compose buffer header line."
@@ -632,8 +651,7 @@ validated media plists in the same shape used by compose buffers."
     (user-error "Unsupported Bluesky reply policy: %s" reply-policy))
   (when (and (string-blank-p text) (not media))
     (user-error "Cannot post empty text without media"))
-  (when (bluesky-post--over-limit-p text)
-    (user-error "Post exceeds Bluesky length limits"))
+  (bluesky-post--check-length text)
   (when (and reply-to (bluesky-post-reply-disabled-p reply-to))
     (user-error "Replies are disabled for this post"))
   (with-temp-buffer
@@ -658,7 +676,7 @@ validated media plists in the same shape used by compose buffers."
      ((and (string-blank-p text) (not bluesky-post-media))
       (user-error "Cannot post empty text without media"))
      ((bluesky-post--over-limit-p text)
-      (user-error "Post exceeds Bluesky length limits"))
+      (bluesky-post--check-length text))
      ((and bluesky-post-reply-to
            (bluesky-post-reply-disabled-p bluesky-post-reply-to))
       (user-error "Replies are disabled for this post"))

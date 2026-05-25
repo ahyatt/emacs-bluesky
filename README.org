@@ -102,3 +102,18 @@ the future-returning nonblocking form:
  :callback (lambda (created)
              (message "Posted %s" (plist-get created :uri))))
 #+end_src
+
+When text exceeds Bluesky's limits, posting signals
+=bluesky-post-text-too-long=.  Clients should handle this condition when
+accepting user-provided text.  The signal data includes the message followed by
+=:characters=, =:character-limit=, =:bytes=, and =:byte-limit=:
+
+#+begin_src emacs-lisp
+(condition-case err
+    (bluesky-post text)
+  (bluesky-post-text-too-long
+   (let ((data (cdr err)))
+     (message "Too long: %s chars, %s bytes"
+              (plist-get (cdr data) :characters)
+              (plist-get (cdr data) :bytes)))))
+#+end_src

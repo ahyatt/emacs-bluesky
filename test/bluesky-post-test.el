@@ -150,6 +150,22 @@
         (should (equal (plist-get record :text) "Example #emacs"))
         (should (= (length facets) 2))))))
 
+(ert-deftest bluesky-post-submit-text-signals-too-long ()
+  (let* ((bluesky-post-character-limit 3)
+         (err (should-error
+               (bluesky-post-submit-text
+                "abcd"
+                :host "bsky.social"
+                :session (list :handle "user.test"))
+               :type 'bluesky-post-text-too-long))
+         (data (cdr err)))
+    (should (equal (car data)
+                   "Post exceeds Bluesky length limits: 4/3 chars, 4/3000 bytes"))
+    (should (= (plist-get (cdr data) :characters) 4))
+    (should (= (plist-get (cdr data) :character-limit) 3))
+    (should (= (plist-get (cdr data) :bytes) 4))
+    (should (= (plist-get (cdr data) :byte-limit) 3000))))
+
 (ert-deftest bluesky-post-commands-are-mode-scoped ()
   (dolist (command '(bluesky-post-cycle-format
                      bluesky-post-cycle-reply-policy
