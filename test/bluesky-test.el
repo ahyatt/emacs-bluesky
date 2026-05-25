@@ -230,6 +230,70 @@
                  "@author.test")))
       (should (equal (bluesky--read-actor) "author.test")))))
 
+(defun bluesky-test--post-view (uri)
+  "Return a minimal post view for URI."
+  (list :uri uri
+        :cid (concat uri "-cid")
+        :author (list :did "did:plc:author")
+        :record (list :text uri
+                      :createdAt "2026-05-25T00:00:00Z")))
+
+(ert-deftest bluesky-timeline-response-hides-replies-when-configured ()
+  (let* ((bluesky-timeline-reply-display 'hide)
+         (root (bluesky-test--post-view "at://did/root/post"))
+         (reply (bluesky-test--post-view "at://did/reply/post"))
+         (normal (bluesky-test--post-view "at://did/normal/post"))
+         (response (list :feed
+                         (vector
+                          (list :post reply
+                                :reply (list :root root :parent root))
+                          (list :post normal)))))
+    (should (equal (mapcar #'bluesky--post-uri
+                           (bluesky--timeline-response-posts response))
+                   '("at://did/normal/post")))))
+
+(ert-deftest bluesky-timeline-response-renders-available-reply-context ()
+  (let* ((bluesky-timeline-reply-display 'context)
+         (root (bluesky-test--post-view "at://did/root/post"))
+         (parent (bluesky-test--post-view "at://did/parent/post"))
+         (reply (bluesky-test--post-view "at://did/reply/post"))
+         (response (list :feed
+                         (vector
+                          (list :post reply
+                                :reply (list :root root :parent parent))))))
+    (should (equal (mapcar #'bluesky--post-uri
+                           (bluesky--timeline-response-posts response))
+                   '("at://did/root/post"
+                     "at://did/parent/post"
+                     "at://did/reply/post")))))
+
+(ert-deftest bluesky-timeline-response-renders-reply-context-as-chain ()
+  (let* ((bluesky-timeline-reply-display 'context)
+         (root (bluesky-test--post-view "at://did/root/post"))
+         (parent (bluesky-test--post-view "at://did/parent/post"))
+         (reply (bluesky-test--post-view "at://did/reply/post"))
+         (response (list :feed
+                         (vector
+                          (list :post reply
+                                :reply (list :root root :parent parent)))))
+         (items (bluesky--flatten-feed-posts
+                 (bluesky--timeline-response-posts response))))
+    (should (equal (mapcar (lambda (item) (plist-get item :depth)) items)
+                   '(0 1 2)))))
+
+(ert-deftest bluesky-timeline-response-deduplicates-root-parent-reply-context ()
+  (let* ((bluesky-timeline-reply-display 'context)
+         (root (bluesky-test--post-view "at://did/root/post"))
+         (reply (bluesky-test--post-view "at://did/reply/post"))
+         (response (list :feed
+                         (vector
+                          (list :post reply
+                                :reply (list :root root :parent root))))))
+    (should (equal (mapcar #'bluesky--post-uri
+                           (bluesky--timeline-response-posts response))
+                   '("at://did/root/post"
+                     "at://did/reply/post")))))
+
 (provide 'bluesky-test)
 
 ;;; bluesky-test.el ends here
