@@ -125,6 +125,31 @@
                       (funcall original-fboundp symbol)))))
       (should-not (bluesky-post--image-aspect-ratio "/tmp/image.png")))))
 
+(ert-deftest bluesky-post-submit-text-builds-and-submits-post ()
+  (let (create-args)
+    (cl-letf (((symbol-function 'bluesky-conn-create-post)
+               (lambda (&rest args)
+                 (setq create-args args)
+                 (futur-done (list :uri "at://did/app.bsky.feed.post/rkey"
+                                   :cid "cid")))))
+      (should
+       (equal
+        (futur-blocking-wait-to-get-result
+         (bluesky-post-submit-text
+          "[Example](https://example.com) #emacs"
+          :host "bsky.social"
+          :session (list :handle "user.test")
+          :source-format 'markdown))
+        (list :uri "at://did/app.bsky.feed.post/rkey"
+              :cid "cid")))
+      (should (equal (nth 0 create-args) "bsky.social"))
+      (should (equal (nth 1 create-args) "user.test"))
+      (should (equal (nth 2 create-args) "app.bsky.feed.post"))
+      (let* ((record (nth 3 create-args))
+             (facets (plist-get record :facets)))
+        (should (equal (plist-get record :text) "Example #emacs"))
+        (should (= (length facets) 2))))))
+
 (ert-deftest bluesky-post-commands-are-mode-scoped ()
   (dolist (command '(bluesky-post-cycle-format
                      bluesky-post-cycle-reply-policy

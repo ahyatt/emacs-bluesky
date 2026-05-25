@@ -613,6 +613,41 @@ threadgate allow rules.  ALLOW-EMBEDDING is passed through to postgate handling.
       (bluesky-post--create-threadgate-if-needed
        created host handle reply-policy allow-embedding))))
 
+(cl-defun bluesky-post-submit-text
+    (text &key host session (source-format 'plain) reply-to
+          (reply-policy 'everyone) (allow-embedding t) media)
+  "Submit TEXT as a Bluesky post and return a future.
+HOST and SESSION identify the authenticated account.  SOURCE-FORMAT controls
+rich-text conversion and can be `plain', `markdown', or `org'.  REPLY-TO, when
+non-nil, is the post being replied to.  REPLY-POLICY controls the threadgate for
+new posts.  ALLOW-EMBEDDING controls postgate creation.  MEDIA is a list of
+validated media plists in the same shape used by compose buffers."
+  (unless (and host session)
+    (user-error "Host and session are required"))
+  (unless (stringp text)
+    (user-error "Text must be a string"))
+  (unless (memq source-format bluesky-post--source-formats)
+    (user-error "Unsupported Bluesky source format: %s" source-format))
+  (unless (memq reply-policy bluesky-post--reply-policies)
+    (user-error "Unsupported Bluesky reply policy: %s" reply-policy))
+  (when (and (string-blank-p text) (not media))
+    (user-error "Cannot post empty text without media"))
+  (when (bluesky-post--over-limit-p text)
+    (user-error "Post exceeds Bluesky length limits"))
+  (when (and reply-to (bluesky-post-reply-disabled-p reply-to))
+    (user-error "Replies are disabled for this post"))
+  (with-temp-buffer
+    (bluesky-post-mode)
+    (setq-local bluesky-post-host host)
+    (setq-local bluesky-post-session session)
+    (setq-local bluesky-post-reply-to reply-to)
+    (setq-local bluesky-post-source-format source-format)
+    (setq-local bluesky-post-reply-policy reply-policy)
+    (setq-local bluesky-post-allow-embedding allow-embedding)
+    (setq-local bluesky-post-media media)
+    (insert text)
+    (bluesky-post--submit-future)))
+
 (defun bluesky-post-submit ()
   "Submit the current Bluesky post."
   (interactive nil bluesky-post-mode)

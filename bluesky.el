@@ -810,6 +810,56 @@ USERNAME, PASSWORD, and HOST mirror `bluesky'."
      password
      host)))
 
+;;;###autoload
+(cl-defun bluesky-post-async
+    (text &key username password host source-format reply-to
+          reply-policy (allow-embedding t) media callback)
+  "Authenticate if needed, submit TEXT as a Bluesky post, and return a future.
+USERNAME, PASSWORD, and HOST mirror `bluesky'.  SOURCE-FORMAT can be `plain',
+`markdown', or `org'.  REPLY-TO, REPLY-POLICY, ALLOW-EMBEDDING, and MEDIA mirror
+`bluesky-post-submit-text'.  CALLBACK, when non-nil, is called with the created
+post."
+  (when (and callback (not (functionp callback)))
+    (user-error "Callback must be a function"))
+  (let ((future
+         (bluesky--with-session
+          (lambda (host session)
+            (bluesky-post-submit-text
+             text
+             :host host
+             :session session
+             :source-format (or source-format 'plain)
+             :reply-to reply-to
+             :reply-policy (or reply-policy 'everyone)
+             :allow-embedding allow-embedding
+             :media media))
+          username
+          password
+          host)))
+    (if callback
+        (futur-bind future callback)
+      future)))
+
+;;;###autoload
+(cl-defun bluesky-post
+    (text &key username password host source-format reply-to
+          reply-policy (allow-embedding t) media)
+  "Authenticate if needed, submit TEXT as a Bluesky post, and return the result.
+This blocks until the post has been created.  USERNAME, PASSWORD, HOST,
+SOURCE-FORMAT, REPLY-TO, REPLY-POLICY, ALLOW-EMBEDDING, and MEDIA mirror
+`bluesky-post-async'."
+  (futur-blocking-wait-to-get-result
+   (bluesky-post-async
+    text
+    :username username
+    :password password
+    :host host
+    :source-format source-format
+    :reply-to reply-to
+    :reply-policy reply-policy
+    :allow-embedding allow-embedding
+    :media media)))
+
 (defun bluesky-reply ()
   "Open a buffer to reply to the selected post."
   (interactive nil bluesky-mode)
