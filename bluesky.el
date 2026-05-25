@@ -52,6 +52,17 @@
   :type 'string
   :group 'bluesky)
 
+(defcustom bluesky-timeline-reply-display 'context
+  "How replies should appear in the home timeline.
+The value `standalone' shows only the followed reply post, matching the
+traditional timeline behavior.  The value `hide' omits timeline entries that
+are replies.  The value `context' renders the reply with the root and direct
+parent posts supplied by the feed entry, when available."
+  :type '(choice (const :tag "Show replies as standalone posts" standalone)
+                 (const :tag "Hide replies" hide)
+                 (const :tag "Show available reply context" context))
+  :group 'bluesky)
+
 (defconst bluesky-timeline-buffer-name "*Bluesky Timeline*"
   "The name of the Bluesky timeline buffer.")
 
@@ -1029,6 +1040,76 @@ POST, when present, is used to build a friendlier buffer name."
   (mapcar (lambda (entry) (plist-get entry :post))
           (append (plist-get response :feed) nil)))
 
+(defun bluesky--feed-post-depth (post)
+  "Return POST's timeline display depth."
+  (or (plist-get post :bluesky-timeline-depth) 0))
+
+(defun bluesky--flatten-feed-posts (posts)
+  "Return flattened render items for POSTS, honoring timeline depths."
+  (let ((seen (make-hash-table :test #'equal))
+        items)
+    (dolist (post posts items)
+      (setq items
+            (append items
+                    (bluesky-model-flatten-posts
+                     (list post)
+                     (bluesky--feed-post-depth post)
+                     t
+                     nil
+                     seen))))))
+
+(defun bluesky--post-uri (post)
+  "Return POST's AT URI, if present."
+  (plist-get post :uri))
+
+(defun bluesky--post-with-timeline-depth (post depth)
+  "Return a copy of POST annotated for display at DEPTH."
+  (plist-put (copy-sequence post) :bluesky-timeline-depth depth))
+
+(defun bluesky--append-unique-post (posts post seen)
+  "Return POSTS with POST appended unless its URI is already in SEEN.
+SEEN is updated when POST has a URI."
+  (if-let* ((uri (bluesky--post-uri post)))
+      (if (gethash uri seen)
+          posts
+        (puthash uri t seen)
+        (append posts (list post)))
+    (append posts (list post))))
+
+(defun bluesky--timeline-entry-context-posts (entry)
+  "Return renderable posts for timeline ENTRY with reply context."
+  (let* ((post (plist-get entry :post))
+         (reply (plist-get entry :reply))
+         (root (plist-get reply :root))
+         (parent (plist-get reply :parent))
+         (seen (make-hash-table :test #'equal))
+         posts)
+    (dolist (context-post (list root parent post))
+      (when context-post
+        (setq posts
+              (bluesky--append-unique-post
+               posts
+               (bluesky--post-with-timeline-depth context-post (length posts))
+               seen))))
+    posts))
+
+(defun bluesky--timeline-response-posts (response)
+  "Return home timeline post views from RESPONSE.
+Reply entries are handled according to `bluesky-timeline-reply-display'."
+  (let (posts)
+    (dolist (entry (append (plist-get response :feed) nil) posts)
+      (let ((entry-post (plist-get entry :post)))
+        (pcase bluesky-timeline-reply-display
+          ('hide
+           (unless (plist-get entry :reply)
+             (setq posts (append posts (list entry-post)))))
+          ('context
+           (setq posts
+                 (append posts
+                         (bluesky--timeline-entry-context-posts entry))))
+          (_
+           (setq posts (append posts (list entry-post)))))))))
+
 (defun bluesky--post-record-notification-p (notification)
   "Return non-nil when NOTIFICATION contains an app.bsky.feed.post record."
   (equal (plist-get (plist-get notification :record) :$type)
@@ -1077,7 +1158,7 @@ response.  POSTS and CURSOR are the currently loaded posts and next-page
 cursor.  LOADING, ERROR, ITEMS, SELECTED-ID, REFRESH-REQUESTED, and
 EXTEND-REQUESTED are VUI state values.  PRESERVE-NEXT-HIGHLIGHT non-nil means
 the next selected-post highlight should not move point."
-  (let ((current-items (bluesky-model-flatten-posts posts 0 t)))
+  (let ((current-items (bluesky--flatten-feed-posts posts)))
     (vui-use-effect (posts)
       (bluesky--remember-post-authors posts)
       nil)
@@ -1247,7 +1328,7 @@ mirror `bluesky--render-paged-feed'."
    (list 'timeline host handle)
    (lambda (cursor)
      (bluesky-conn-get-timeline host handle cursor 50))
-   #'bluesky--feed-response-posts
+   #'bluesky--timeline-response-posts
    posts cursor loading error items selected-id refresh-requested
    extend-requested
    bluesky--selection-from-point-preserve-next-highlight))

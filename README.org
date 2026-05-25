@@ -58,6 +58,11 @@ This opens the timeline buffer.  In =bluesky-mode=:
 - =R= toggles repost.
 - =b= toggles bookmark.
 
+Timeline replies are controlled by =bluesky-timeline-reply-display=.  The default
+value, =context=, shows available root and parent posts above a followed reply.
+Set it to =hide= to omit replies from the home timeline, or =standalone= to show
+replies without context.
+
 Other feed-like views:
 
 - =M-x bluesky-author= opens an author's posts.  From a Bluesky buffer it
