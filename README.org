@@ -122,3 +122,88 @@ accepting user-provided text.  The signal data includes the message followed by
               (plist-get (cdr data) :characters)
               (plist-get (cdr data) :bytes)))))
 #+end_src
+
+* Programmatic reading
+
+The lower-level API helpers in =bluesky-conn.el= return =futur= objects that
+resolve to Bluesky app-view JSON decoded as Emacs plists and vectors.  They use
+the cached authenticated session created by =bluesky=, =bluesky--with-session=,
+or =bluesky-conn-create-session=, and refresh expired tokens automatically.
+
+Common read entry points are:
+
+- =bluesky-conn-get-timeline= for the authenticated user's home timeline.
+- =bluesky-conn-get-author-feed= for posts by a handle or DID.
+- =bluesky-conn-get-feed= for a custom feed generator =at://= URI.
+- =bluesky-conn-search-posts= for post search.
+- =bluesky-conn-get-post-thread= for a post and its thread, given the post's AT URI.
+- =bluesky-conn-get-actor-feeds= and
+  =bluesky-conn-get-popular-feed-generators= for discovering custom feeds.
+- =bluesky-conn-list-notifications= for account notifications.
+
+Feed-like responses contain a =:feed= vector.  Each entry usually contains a
+=:post= app-view object, and each post includes its author app-view object under
+=:author=.  The post text is in the repo record at =(:record :text)=, while
+stable identifiers are available as =:uri= and =:cid=.
+
+#+begin_src emacs-lisp
+(bluesky--with-session
+ (lambda (host session)
+   (let ((handle (plist-get session :handle)))
+     (futur-bind
+      (bluesky-conn-get-author-feed host handle "bsky.app" nil 25)
+      (lambda (response)
+        (dolist (entry (append (plist-get response :feed) nil))
+          (let* ((post (plist-get entry :post))
+                 (record (plist-get post :record))
+                 (author (plist-get post :author)))
+            (message "%s: %s"
+                     (plist-get author :handle)
+                     (plist-get record :text)))))))))
+#+end_src
+
+The timeline endpoint has the same basic shape, but home timeline entries can
+also include reply context.  Use =bluesky--timeline-response-posts= if you want
+the same reply-context behavior used by the interactive timeline, or
+=bluesky--feed-response-posts= if you only want the direct =:post= objects from
+a feed response.
+
+#+begin_src emacs-lisp
+(bluesky--with-session
+ (lambda (host session)
+   (let ((handle (plist-get session :handle)))
+     (futur-bind
+      (bluesky-conn-get-timeline host handle nil 50)
+      (lambda (response)
+        (mapcar (lambda (post)
+                  (list :uri (plist-get post :uri)
+                        :text (plist-get (plist-get post :record) :text)
+                        :author (plist-get
+                                 (plist-get post :author)
+                                 :handle)))
+                (bluesky--timeline-response-posts response)))))))
+#+end_src
+
+To inspect one post in thread context, pass the post's AT URI to
+=bluesky-conn-get-post-thread=.  The response contains a =:thread= tree of
+=app.bsky.feed.defs#threadViewPost= objects rather than a flat =:feed= vector.
+
+#+begin_src emacs-lisp
+(bluesky--with-session
+ (lambda (host session)
+   (futur-bind
+    (bluesky-conn-get-post-thread
+     host
+     (plist-get session :handle)
+     "at://did:plc:example/app.bsky.feed.post/example"
+     6
+     80)
+    (lambda (response)
+      (let* ((thread (plist-get response :thread))
+             (post (plist-get thread :post)))
+        (message "Thread root: %s" (plist-get post :uri)))))))
+#+end_src
+
+There is currently no dedicated wrapper for standalone profile lookup.  If you
+need that, call the generic XRPC helper directly or add a small wrapper around
+=app.bsky.actor.getProfile=.
