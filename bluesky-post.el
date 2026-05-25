@@ -48,6 +48,10 @@
   :type 'integer
   :group 'bluesky)
 
+(define-error 'bluesky-post-text-too-long
+  "Post exceeds Bluesky length limits"
+  'user-error)
+
 (defface bluesky-post-context
   '((t :inherit shadow))
   "Face for the post context shown in compose buffers.")
@@ -189,6 +193,21 @@ Use \\<bluesky-post-mode-map>\\[bluesky-post-submit] to submit and
   (let ((text (or text (bluesky-post--content-string))))
     (or (> (bluesky-post--character-count text) bluesky-post-character-limit)
         (> (bluesky-post--byte-count text) bluesky-post-byte-limit))))
+
+(defun bluesky-post--check-length (text)
+  "Signal `bluesky-post-text-too-long' when TEXT exceeds post limits."
+  (let ((chars (bluesky-post--character-count text))
+        (bytes (bluesky-post--byte-count text)))
+    (when (or (> chars bluesky-post-character-limit)
+              (> bytes bluesky-post-byte-limit))
+      (signal 'bluesky-post-text-too-long
+              (list (format "Post exceeds Bluesky length limits: %d/%d chars, %d/%d bytes"
+                            chars bluesky-post-character-limit
+                            bytes bluesky-post-byte-limit)
+                    :characters chars
+                    :character-limit bluesky-post-character-limit
+                    :bytes bytes
+                    :byte-limit bluesky-post-byte-limit)))))
 
 (defun bluesky-post--header-line ()
   "Return the compose buffer header line."
@@ -613,6 +632,40 @@ threadgate allow rules.  ALLOW-EMBEDDING is passed through to postgate handling.
       (bluesky-post--create-threadgate-if-needed
        created host handle reply-policy allow-embedding))))
 
+(cl-defun bluesky-post-submit-text
+    (text &key host session (source-format 'plain) reply-to
+          (reply-policy 'everyone) (allow-embedding t) media)
+  "Submit TEXT as a Bluesky post and return a future.
+HOST and SESSION identify the authenticated account.  SOURCE-FORMAT controls
+rich-text conversion and can be `plain', `markdown', or `org'.  REPLY-TO, when
+non-nil, is the post being replied to.  REPLY-POLICY controls the threadgate for
+new posts.  ALLOW-EMBEDDING controls postgate creation.  MEDIA is a list of
+validated media plists in the same shape used by compose buffers."
+  (unless (and host session)
+    (user-error "Host and session are required"))
+  (unless (stringp text)
+    (user-error "Text must be a string"))
+  (unless (memq source-format bluesky-post--source-formats)
+    (user-error "Unsupported Bluesky source format: %s" source-format))
+  (unless (memq reply-policy bluesky-post--reply-policies)
+    (user-error "Unsupported Bluesky reply policy: %s" reply-policy))
+  (when (and (string-blank-p text) (not media))
+    (user-error "Cannot post empty text without media"))
+  (bluesky-post--check-length text)
+  (when (and reply-to (bluesky-post-reply-disabled-p reply-to))
+    (user-error "Replies are disabled for this post"))
+  (with-temp-buffer
+    (bluesky-post-mode)
+    (setq-local bluesky-post-host host)
+    (setq-local bluesky-post-session session)
+    (setq-local bluesky-post-reply-to reply-to)
+    (setq-local bluesky-post-source-format source-format)
+    (setq-local bluesky-post-reply-policy reply-policy)
+    (setq-local bluesky-post-allow-embedding allow-embedding)
+    (setq-local bluesky-post-media media)
+    (insert text)
+    (bluesky-post--submit-future)))
+
 (defun bluesky-post-submit ()
   "Submit the current Bluesky post."
   (interactive nil bluesky-post-mode)
@@ -623,7 +676,7 @@ threadgate allow rules.  ALLOW-EMBEDDING is passed through to postgate handling.
      ((and (string-blank-p text) (not bluesky-post-media))
       (user-error "Cannot post empty text without media"))
      ((bluesky-post--over-limit-p text)
-      (user-error "Post exceeds Bluesky length limits"))
+      (bluesky-post--check-length text))
      ((and bluesky-post-reply-to
            (bluesky-post-reply-disabled-p bluesky-post-reply-to))
       (user-error "Replies are disabled for this post"))

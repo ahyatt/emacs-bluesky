@@ -79,3 +79,41 @@ Compose buffers use =bluesky-post-mode=:
 - =C-c C-k= cancels the compose buffer.
 - =C-c C-a= attaches an image or MP4 video.
 - =C-c C-d= clears attached media.
+
+* Programmatic posting
+
+Elisp can post without opening a compose buffer by calling =bluesky-post=.  It
+uses the same =auth-source= lookup as =M-x bluesky=, so this works from an Emacs
+session that hasn't yet authed, when credentials are available:
+
+#+begin_src emacs-lisp
+(let ((created (bluesky-post "Hello from Emacs")))
+  (message "Posted %s" (plist-get created :uri)))
+#+end_src
+
+Pass =:username=, =:password=, or =:host= to override credential lookup, and
+=:source-format= with =plain=, =markdown=, or =org= to reuse the compose
+buffer's rich-text conversion.  Use =bluesky-post-async= instead when you want
+the future-returning nonblocking form:
+
+#+begin_src emacs-lisp
+(bluesky-post-async
+ "Hello from Emacs"
+ :callback (lambda (created)
+             (message "Posted %s" (plist-get created :uri))))
+#+end_src
+
+When text exceeds Bluesky's limits, posting signals
+=bluesky-post-text-too-long=.  Clients should handle this condition when
+accepting user-provided text.  The signal data includes the message followed by
+=:characters=, =:character-limit=, =:bytes=, and =:byte-limit=:
+
+#+begin_src emacs-lisp
+(condition-case err
+    (bluesky-post text)
+  (bluesky-post-text-too-long
+   (let ((data (cdr err)))
+     (message "Too long: %s chars, %s bytes"
+              (plist-get (cdr data) :characters)
+              (plist-get (cdr data) :bytes)))))
+#+end_src

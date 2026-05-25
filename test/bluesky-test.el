@@ -61,6 +61,104 @@
         (should (eq (plist-get compose-args :source-buffer)
                     (current-buffer)))))))
 
+(ert-deftest bluesky-post-async-authenticates-and-submits-text ()
+  (let (with-session-called submit-args)
+    (cl-letf (((symbol-function 'bluesky--with-session)
+               (lambda (callback &optional username password host)
+                 (setq with-session-called (list username password host))
+                 (funcall callback
+                          "https://bsky.social"
+                          (list :handle "user.test"))))
+              ((symbol-function 'bluesky-post-submit-text)
+               (lambda (&rest args)
+                 (setq submit-args args)
+                 'created-future)))
+      (should (eq (bluesky-post-async "hello"
+                                      :username "user.test"
+                                      :password "password"
+                                      :host "https://bsky.social"
+                                      :source-format 'markdown
+                                      :reply-policy 'followers
+                                      :allow-embedding nil)
+                  'created-future)))
+    (should (equal with-session-called
+                   '("user.test" "password" "https://bsky.social")))
+    (should (equal (car submit-args) "hello"))
+    (should (equal (plist-get (cdr submit-args) :host) "https://bsky.social"))
+    (should (equal (plist-get (cdr submit-args) :session)
+                   '(:handle "user.test")))
+    (should (eq (plist-get (cdr submit-args) :source-format) 'markdown))
+    (should (eq (plist-get (cdr submit-args) :reply-policy) 'followers))
+    (should-not (plist-get (cdr submit-args) :allow-embedding))))
+
+(ert-deftest bluesky-post-blocks-for-created-post ()
+  (let (async-args)
+    (cl-letf (((symbol-function 'bluesky-post-async)
+               (lambda (&rest args)
+                 (setq async-args args)
+                 (futur-done (list :uri "at://did/app.bsky.feed.post/rkey"
+                                   :cid "cid")))))
+      (should
+       (equal
+        (bluesky-post "hello" :username "user.test")
+        (list :uri "at://did/app.bsky.feed.post/rkey"
+              :cid "cid"))))
+    (should (equal (car async-args) "hello"))
+    (should (equal (plist-get (cdr async-args) :username) "user.test"))))
+
+(ert-deftest bluesky-post-async-calls-callback ()
+  (let (callback-value)
+    (cl-letf (((symbol-function 'bluesky--with-session)
+               (lambda (callback &rest _args)
+                 (funcall callback
+                          "https://bsky.social"
+                          (list :handle "user.test"))))
+              ((symbol-function 'bluesky-post-submit-text)
+               (lambda (&rest _args)
+                 (futur-done (list :uri "at://did/app.bsky.feed.post/rkey"
+                                   :cid "cid")))))
+      (should
+       (equal
+        (futur-blocking-wait-to-get-result
+         (bluesky-post-async
+          "hello"
+          :callback (lambda (created)
+                      (setq callback-value created)
+                      (plist-get created :uri))))
+        "at://did/app.bsky.feed.post/rkey")))
+    (should (equal callback-value
+                   (list :uri "at://did/app.bsky.feed.post/rkey"
+                         :cid "cid")))))
+
+(ert-deftest bluesky-post-fresh-session-returns-created-post ()
+  (let (create-session-args create-post-args)
+    (cl-letf (((symbol-function 'bluesky-conn-create-session)
+               (lambda (&rest args)
+                 (setq create-session-args args)
+                 (futur-done (list :handle "user.test"
+                                   :did "did:plc:user"))))
+              ((symbol-function 'bluesky-conn-get-session)
+               (lambda (&rest _args) nil))
+              ((symbol-function 'auth-source-search)
+               (lambda (&rest _args) nil))
+              ((symbol-function 'bluesky-conn-create-post)
+               (lambda (&rest args)
+                 (setq create-post-args args)
+                 (futur-done (list :uri "at://did/app.bsky.feed.post/rkey"
+                                   :cid "cid")))))
+      (should
+       (equal
+        (bluesky-post "hello"
+                      :username "user.test"
+                      :password "password"
+                      :host "bsky.social")
+        (list :uri "at://did/app.bsky.feed.post/rkey"
+              :cid "cid"))))
+    (should (equal create-session-args
+                   '("bsky.social" "user.test" "password")))
+    (should (equal (nth 0 create-post-args) "bsky.social"))
+    (should (equal (nth 1 create-post-args) "user.test"))))
+
 (ert-deftest bluesky-buffer-commands-are-mode-scoped ()
   (dolist (command '(bluesky-feed-refresh
                      bluesky-feed-extend
