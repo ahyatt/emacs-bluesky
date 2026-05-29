@@ -48,6 +48,13 @@
   :type 'integer
   :group 'bluesky)
 
+(defcustom bluesky-post-warn-unsupported-formatting t
+  "Non-nil to warn before submitting unsupported Markdown or Org formatting.
+Bluesky rich text facets currently support links, mentions, and hashtags, but
+not font styling such as bold, italics, underline, strike-through, or code."
+  :type 'boolean
+  :group 'bluesky)
+
 (define-error 'bluesky-post-text-too-long
   "Post exceeds Bluesky length limits"
   'user-error)
@@ -87,7 +94,10 @@
   "Overlay covering the reply context in the compose buffer.")
 
 (defvar-local bluesky-post-source-format 'plain
-  "Markup format used by the current compose buffer.")
+  "Markup format used by the current compose buffer.
+Markdown and Org source formats convert supported link syntax into Bluesky link
+facets.  Bluesky does not currently support font styling facets such as bold or
+italics, so those markers remain literal post text.")
 
 (defvar-local bluesky-post-reply-policy 'everyone
   "Reply policy for the post being composed.")
@@ -476,6 +486,46 @@ for the link URI.  Return a plist with :text and :facets."
     (setq out (concat out (substring text start)))
     (list :text out :facets (nreverse facets))))
 
+(defun bluesky-post--unsupported-formatting-markers (text source-format)
+  "Return unsupported markup markers found in TEXT for SOURCE-FORMAT.
+The returned value is a list of display names for common styling forms that
+Bluesky cannot represent as rich-text facets."
+  (let (markers)
+    (pcase source-format
+      ('markdown
+       (dolist (spec '(("\\(?:\\`\\|[^\\]\\)\\*\\*[^*\n]+\\*\\*" . "bold")
+                       ("\\(?:\\`\\|[^\\]\\)__[^_\n]+__" . "bold")
+                       ("\\(?:\\`\\|[^\\]\\)\\*[^* \n][^*\n]*\\*" . "italic")
+                       ("\\(?:\\`\\|[^\\]\\)_[^_ \n][^_\n]*_" . "italic")
+                       ("\\(?:\\`\\|[^\\]\\)~~[^~\n]+~~" . "strikethrough")
+                       ("\\(?:\\`\\|[^\\]\\)`[^`\n]+`" . "code")))
+         (when (string-match-p (car spec) text)
+           (push (cdr spec) markers))))
+      ('org
+       (dolist (spec '(("\\(?:\\`\\|[[:space:][:punct:]]\\)\\*[^* \n][^*\n]*\\*" . "bold")
+                       ("\\(?:\\`\\|[[:space:][:punct:]]\\)/[^/ \n][^/\n]*/" . "italic")
+                       ("\\(?:\\`\\|[[:space:][:punct:]]\\)_[^_ \n][^_\n]*_" . "underline")
+                       ("\\(?:\\`\\|[[:space:][:punct:]]\\)\\+[^+ \n][^+\n]*\\+" . "strikethrough")
+                       ("\\(?:\\`\\|[[:space:][:punct:]]\\)=[^= \n][^=\n]*=" . "verbatim")
+                       ("\\(?:\\`\\|[[:space:][:punct:]]\\)~[^~ \n][^~\n]*~" . "code")))
+         (when (string-match-p (car spec) text)
+           (push (cdr spec) markers)))))
+    (nreverse (delete-dups markers))))
+
+(defun bluesky-post--warn-unsupported-formatting (text source-format)
+  "Warn when TEXT contains SOURCE-FORMAT markup Bluesky cannot represent."
+  (when (and bluesky-post-warn-unsupported-formatting
+             (memq source-format '(markdown org)))
+    (when-let* ((markers (bluesky-post--unsupported-formatting-markers
+                          text source-format)))
+      (display-warning
+       'bluesky-post
+       (format
+        "Bluesky does not support %s formatting facets; %s markup will post literally. Supported rich text facets are links, mentions, and hashtags."
+        (bluesky-post--format-label source-format)
+        (string-join markers ", "))
+       :warning))))
+
 (defun bluesky-post--rich-text ()
   "Return a plist with converted :text and :facets for the current buffer."
   (let* ((source (bluesky-post--content-string))
@@ -683,6 +733,8 @@ validated media plists in the same shape used by compose buffers."
      ((not (and bluesky-post-host bluesky-post-session))
       (user-error "No Bluesky session for this compose buffer"))
      (t
+      (bluesky-post--warn-unsupported-formatting
+       text bluesky-post-source-format)
       (setq bluesky-post-submitting t)
       (force-mode-line-update)
       (let ((buffer (current-buffer))
