@@ -98,8 +98,12 @@ session that hasn't yet authed, when credentials are available:
 
 Pass =:username=, =:password=, or =:host= to override credential lookup, and
 =:source-format= with =plain=, =markdown=, or =org= to reuse the compose
-buffer's rich-text conversion.  Use =bluesky-post-async= instead when you want
-the future-returning nonblocking form:
+buffer's rich-text conversion.  Markdown and Org links are converted into
+Bluesky link facets, and bare URLs and hashtags are faceted automatically.
+Bluesky rich text does not currently support bold, italics, underline,
+strike-through, or code styling facets, so those source markers are posted as
+literal text.  Use =bluesky-post-async= instead when you want the
+future-returning nonblocking form:
 
 #+begin_src emacs-lisp
 (bluesky-post-async

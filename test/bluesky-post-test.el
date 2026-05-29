@@ -92,6 +92,26 @@
            (feature (bluesky-post-test--facet-feature facet)))
       (should (equal (plist-get feature :tag) "#topic")))))
 
+(ert-deftest bluesky-post-rich-text-detects-unsupported-markdown-formatting ()
+  (should (equal (bluesky-post--unsupported-formatting-markers
+                  "**bold** *italic* `code`" 'markdown)
+                 '("bold" "italic" "code"))))
+
+(ert-deftest bluesky-post-rich-text-detects-unsupported-org-formatting ()
+  (should (equal (bluesky-post--unsupported-formatting-markers
+                  "*bold* /italic/ _under_ +strike+ =verb= ~code~" 'org)
+                 '("bold" "italic" "underline" "strikethrough"
+                   "verbatim" "code"))))
+
+(ert-deftest bluesky-post-rich-text-keeps-unsupported-formatting-literal ()
+  (with-temp-buffer
+    (bluesky-post-mode)
+    (setq-local bluesky-post-source-format 'markdown)
+    (insert "**bold** [Example](https://example.com)")
+    (let ((rich (bluesky-post--rich-text)))
+      (should (equal (plist-get rich :text) "**bold** Example"))
+      (should (= (length (plist-get rich :facets)) 1)))))
+
 (ert-deftest bluesky-post-media-embed-builds-images ()
   (let* ((blob-a (list :$type "blob" :ref "a" :mimeType "image/png" :size 10))
          (blob-b (list :$type "blob" :ref "b" :mimeType "image/png" :size 20))
