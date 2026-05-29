@@ -1066,15 +1066,32 @@ POST, when present, is used to build a friendlier buffer name."
   "Return a copy of POST annotated for display at DEPTH."
   (plist-put (copy-sequence post) :bluesky-timeline-depth depth))
 
-(defun bluesky--append-unique-post (posts post seen)
-  "Return POSTS with POST appended unless its URI is already in SEEN.
-SEEN is updated when POST has a URI."
-  (if-let* ((uri (bluesky--post-uri post)))
-      (if (gethash uri seen)
-          posts
-        (puthash uri t seen)
-        (append posts (list post)))
-    (append posts (list post))))
+(defun bluesky--unique-post-additions (new-posts seen)
+  "Return unique posts from NEW-POSTS, updating SEEN.
+Timeline depths are recomputed within each visible chain after duplicates are
+skipped."
+  (let ((next-depth 0)
+        additions)
+    (dolist (post new-posts (nreverse additions))
+      (when (zerop (bluesky--feed-post-depth post))
+        (setq next-depth 0))
+      (let ((uri (bluesky--post-uri post)))
+        (unless (and uri (gethash uri seen))
+          (when uri
+            (puthash uri t seen))
+          (push (bluesky--post-with-timeline-depth post next-depth)
+                additions)
+          (setq next-depth (1+ next-depth)))))))
+
+(defun bluesky--append-unique-posts (posts new-posts)
+  "Return POSTS with NEW-POSTS appended, skipping duplicate post URIs."
+  (let ((seen (make-hash-table :test #'equal))
+        additions)
+    (dolist (post posts)
+      (when-let* ((uri (bluesky--post-uri post)))
+        (puthash uri t seen)))
+    (setq additions (bluesky--unique-post-additions new-posts seen))
+    (append posts additions)))
 
 (defun bluesky--timeline-entry-context-posts (entry)
   "Return renderable posts for timeline ENTRY with reply context."
@@ -1083,32 +1100,33 @@ SEEN is updated when POST has a URI."
          (root (plist-get reply :root))
          (parent (plist-get reply :parent))
          (seen (make-hash-table :test #'equal))
-         posts)
-    (dolist (context-post (list root parent post))
-      (when context-post
-        (setq posts
-              (bluesky--append-unique-post
-               posts
-               (bluesky--post-with-timeline-depth context-post (length posts))
-               seen))))
-    posts))
+         (depth -1))
+    (bluesky--unique-post-additions
+     (mapcar (lambda (context-post)
+               (setq depth (1+ depth))
+               (bluesky--post-with-timeline-depth context-post depth))
+             (delq nil (list root parent post)))
+     seen)))
 
 (defun bluesky--timeline-response-posts (response)
   "Return home timeline post views from RESPONSE.
 Reply entries are handled according to `bluesky-timeline-reply-display'."
-  (let (posts)
-    (dolist (entry (append (plist-get response :feed) nil) posts)
-      (let ((entry-post (plist-get entry :post)))
-        (pcase bluesky-timeline-reply-display
-          ('hide
-           (unless (plist-get entry :reply)
-             (setq posts (append posts (list entry-post)))))
-          ('context
-           (setq posts
-                 (append posts
-                         (bluesky--timeline-entry-context-posts entry))))
-          (_
-           (setq posts (append posts (list entry-post)))))))))
+  (let ((seen (make-hash-table :test #'equal))
+        additions)
+    (cl-labels ((collect (new-posts)
+                  (dolist (post (bluesky--unique-post-additions new-posts seen))
+                    (push post additions))))
+      (dolist (entry (append (plist-get response :feed) nil)
+                     (nreverse additions))
+        (let ((entry-post (plist-get entry :post)))
+          (pcase bluesky-timeline-reply-display
+            ('hide
+             (unless (plist-get entry :reply)
+               (collect (list entry-post))))
+            ('context
+             (collect (bluesky--timeline-entry-context-posts entry)))
+            (_
+             (collect (list entry-post)))))))))
 
 (defun bluesky--post-record-notification-p (notification)
   "Return non-nil when NOTIFICATION contains an app.bsky.feed.post record."
@@ -1198,7 +1216,7 @@ the next selected-post highlight should not move point."
        (lambda (response)
          (vui-batch
           (vui-set-state :cursor (plist-get response :cursor)))
-         (append posts (funcall page-posts response)))
+         (bluesky--append-unique-posts posts (funcall page-posts response)))
        :error))
     nil)
   (vui-vstack
