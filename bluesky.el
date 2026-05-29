@@ -738,21 +738,184 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
         (vui-set-state :refresh-requested (current-time)))
     (user-error "No Bluesky feed is active in this buffer")))
 
-(defun bluesky--run-post-action (description future)
-  "Run FUTURE for a post action described by DESCRIPTION."
+(defun bluesky--adjust-count (count delta)
+  "Return COUNT adjusted by DELTA, never below zero."
+  (max 0 (+ (or count 0) delta)))
+
+(defun bluesky--post-with-updated-action (post action enabled record-uri)
+  "Return POST with ACTION's local viewer state and count updated.
+ACTION is one of `like', `repost', or `bookmark'.  ENABLED means the action was
+created, otherwise it was removed.  RECORD-URI is the created record URI for
+like and repost actions."
+  (let* ((viewer (copy-sequence (or (plist-get post :viewer) nil)))
+         (updated (copy-sequence post)))
+    (pcase action
+      ('like
+       (setq viewer (plist-put viewer :like (and enabled record-uri)))
+       (setq updated (plist-put updated :likeCount
+                                (bluesky--adjust-count
+                                 (plist-get post :likeCount)
+                                 (if enabled 1 -1)))))
+      ('repost
+       (setq viewer (plist-put viewer :repost (and enabled record-uri)))
+       (setq updated (plist-put updated :repostCount
+                                (bluesky--adjust-count
+                                 (plist-get post :repostCount)
+                                 (if enabled 1 -1)))))
+      ('bookmark
+       (setq viewer (plist-put viewer :bookmarked
+                               (if enabled t :json-false)))))
+    (plist-put updated :viewer viewer)))
+
+(defun bluesky--update-post-embed (embed target-uri updater)
+  "Return EMBED with any post matching TARGET-URI updated by UPDATER."
+  (when embed
+    (let ((updated (copy-sequence embed)))
+      (when-let* ((media (plist-get embed :media)))
+        (setq updated
+              (plist-put updated :media
+                         (bluesky--update-post-embed media target-uri updater))))
+      (when-let* ((record (plist-get embed :record)))
+        (setq updated
+              (plist-put updated :record
+                         (bluesky--update-post-view record target-uri updater))))
+      updated)))
+
+(defun bluesky--update-post-record (record target-uri updater)
+  "Return RECORD with embedded posts matching TARGET-URI updated by UPDATER."
+  (when record
+    (let ((updated (copy-sequence record)))
+      (when-let* ((embed (plist-get record :embed)))
+        (setq updated
+              (plist-put updated :embed
+                         (bluesky--update-post-embed embed target-uri updater))))
+      updated)))
+
+(defun bluesky--update-post-view (post target-uri updater)
+  "Return POST with every post view matching TARGET-URI updated by UPDATER."
+  (when post
+    (let ((updated (if (equal (plist-get post :uri) target-uri)
+                       (funcall updater post)
+                     (copy-sequence post))))
+      (when-let* ((embed (plist-get updated :embed)))
+        (setq updated
+              (plist-put updated :embed
+                         (bluesky--update-post-embed embed target-uri updater))))
+      (when-let* ((record (plist-get updated :record)))
+        (setq updated
+              (plist-put updated :record
+                         (if (plist-get record :uri)
+                             (bluesky--update-post-view record target-uri updater)
+                           (bluesky--update-post-record record target-uri updater)))))
+      (when-let* ((value (plist-get updated :value)))
+        (setq updated
+              (plist-put updated :value
+                         (bluesky--update-post-record value target-uri updater))))
+      updated)))
+
+(defun bluesky--update-thread-posts (thread target-uri updater)
+  "Return THREAD with every post matching TARGET-URI updated by UPDATER."
+  (when thread
+    (let ((updated (copy-sequence thread)))
+      (when-let* ((post (plist-get thread :post)))
+        (setq updated
+              (plist-put updated :post
+                         (bluesky--update-post-view post target-uri updater))))
+      (when-let* ((parent (plist-get thread :parent)))
+        (setq updated
+              (plist-put updated :parent
+                         (bluesky--update-thread-posts
+                          parent target-uri updater))))
+      (when-let* ((replies (plist-get thread :replies)))
+        (setq updated
+              (plist-put updated :replies
+                         (apply #'vector
+                                (mapcar
+                                 (lambda (reply)
+                                   (bluesky--update-thread-posts
+                                    reply target-uri updater))
+                                 (append replies nil))))))
+      updated)))
+
+(defun bluesky--update-notification-post (notification target-uri updater)
+  "Return NOTIFICATION with its post record updated when it matches TARGET-URI."
+  (if (equal (plist-get notification :uri) target-uri)
+      (let* ((post (bluesky--notification-post notification))
+             (updated-post (and post
+                                (bluesky--update-post-view
+                                 post target-uri updater)))
+             (updated (copy-sequence notification)))
+        (when updated-post
+          (setq updated
+                (plist-put updated :record
+                           (plist-get updated-post :record)))
+          (dolist (prop '(:viewer :replyCount :repostCount :quoteCount
+                          :likeCount))
+            (when (plist-member updated-post prop)
+              (setq updated
+                    (plist-put updated prop (plist-get updated-post prop))))))
+        updated)
+    notification))
+
+(defun bluesky--update-current-post-state (target-uri updater)
+  "Update TARGET-URI in the active Bluesky component state with UPDATER."
+  (when (and target-uri bluesky-feed-root)
+    (let ((state (vui-instance-state bluesky-feed-root))
+          (vui--root-instance bluesky-feed-root)
+          (vui--current-instance bluesky-feed-root))
+      (vui-batch
+       (when (plist-member state :posts)
+         (vui-set-state
+          :posts
+          (lambda (posts)
+            (mapcar (lambda (post)
+                      (bluesky--update-post-view post target-uri updater))
+                    posts))))
+       (when (plist-member state :thread)
+         (vui-set-state
+          :thread
+          (lambda (thread)
+            (bluesky--update-thread-posts thread target-uri updater))))
+       (when (plist-member state :notifications)
+         (vui-set-state
+          :notifications
+          (lambda (notifications)
+            (mapcar (lambda (notification)
+                      (bluesky--update-notification-post
+                       notification target-uri updater))
+                    notifications))))))))
+
+(defun bluesky--run-post-action (description future &optional on-success)
+  "Run FUTURE for a post action described by DESCRIPTION.
+ON-SUCCESS, when non-nil, is called with FUTURE's value in the source buffer."
   (let ((buffer (current-buffer)))
     (futur-bind
      future
-     (lambda (_value)
+     (lambda (value)
        (message "Bluesky: %s" description)
        (when (buffer-live-p buffer)
          (with-current-buffer buffer
-           (bluesky--request-refresh))))
+           (when on-success
+             (funcall on-success value)))))
      (lambda (err)
        (message "Bluesky: %s failed: %s"
                 description
                 (bluesky--error-message err))
        (futur-failed err)))))
+
+(defun bluesky--local-post-action-callback (post action enabled)
+  "Return a callback that applies ACTION for POST locally.
+ENABLED means the action was created, otherwise it was removed."
+  (let ((target-uri (plist-get post :uri)))
+    (lambda (value)
+      (let ((record-uri (and enabled
+                             (or (plist-get value :uri)
+                                 (plist-get value :bookmark)))))
+        (bluesky--update-current-post-state
+         target-uri
+         (lambda (current-post)
+           (bluesky--post-with-updated-action
+            current-post action enabled record-uri)))))))
 
 (defun bluesky-toggle-like ()
   "Like or unlike the selected post."
@@ -769,7 +932,8 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
                                      like-uri)
        (bluesky-conn-create-like bluesky-host
                                  (plist-get bluesky-feed-session :handle)
-                                 post)))))
+                                 post))
+     (bluesky--local-post-action-callback post 'like (not like-uri)))))
 
 (defun bluesky-toggle-repost ()
   "Repost or unrepost the selected post."
@@ -786,7 +950,8 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
                                      repost-uri)
        (bluesky-conn-create-repost bluesky-host
                                    (plist-get bluesky-feed-session :handle)
-                                   post)))))
+                                   post))
+     (bluesky--local-post-action-callback post 'repost (not repost-uri)))))
 
 (defun bluesky-toggle-bookmark ()
   "Bookmark or unbookmark the selected post."
@@ -803,7 +968,8 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
                                        post)
        (bluesky-conn-create-bookmark bluesky-host
                                      (plist-get bluesky-feed-session :handle)
-                                     post)))))
+                                     post))
+     (bluesky--local-post-action-callback post 'bookmark (not bookmarked)))))
 
 (defun bluesky-compose-post (&optional username password host)
   "Open a buffer to compose a new Bluesky post.
