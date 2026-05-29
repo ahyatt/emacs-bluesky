@@ -274,6 +274,23 @@
                    '("at://did/first/post"
                      "at://did/second/post")))))
 
+(ert-deftest bluesky-append-unique-posts-recomputes-depths-after-skips ()
+  (let* ((root (bluesky-test--post-view "at://did/root/post"))
+         (parent (bluesky-test--post-view "at://did/parent/post"))
+         (reply (bluesky-test--post-view "at://did/reply/post"))
+         (posts (bluesky--append-unique-posts
+                 (list (bluesky--post-with-timeline-depth root 0)
+                       (bluesky--post-with-timeline-depth parent 1))
+                 (list (bluesky--post-with-timeline-depth root 0)
+                       (bluesky--post-with-timeline-depth parent 1)
+                       (bluesky--post-with-timeline-depth reply 2)))))
+    (should (equal (mapcar #'bluesky--post-uri posts)
+                   '("at://did/root/post"
+                     "at://did/parent/post"
+                     "at://did/reply/post")))
+    (should (equal (mapcar #'bluesky--feed-post-depth posts)
+                   '(0 1 0)))))
+
 (ert-deftest bluesky-timeline-response-renders-available-reply-context ()
   (let* ((bluesky-timeline-reply-display 'context)
          (root (bluesky-test--post-view "at://did/root/post"))
@@ -302,6 +319,27 @@
                  (bluesky--timeline-response-posts response))))
     (should (equal (mapcar (lambda (item) (plist-get item :depth)) items)
                    '(0 1 2)))))
+
+(ert-deftest bluesky-timeline-response-recomputes-depths-after-context-dedup ()
+  (let* ((bluesky-timeline-reply-display 'context)
+         (root (bluesky-test--post-view "at://did/root/post"))
+         (parent (bluesky-test--post-view "at://did/parent/post"))
+         (first-reply (bluesky-test--post-view "at://did/first-reply/post"))
+         (second-reply (bluesky-test--post-view "at://did/second-reply/post"))
+         (response (list :feed
+                         (vector
+                          (list :post first-reply
+                                :reply (list :root root :parent parent))
+                          (list :post second-reply
+                                :reply (list :root root :parent parent)))))
+         (posts (bluesky--timeline-response-posts response)))
+    (should (equal (mapcar #'bluesky--post-uri posts)
+                   '("at://did/root/post"
+                     "at://did/parent/post"
+                     "at://did/first-reply/post"
+                     "at://did/second-reply/post")))
+    (should (equal (mapcar #'bluesky--feed-post-depth posts)
+                   '(0 1 2 0)))))
 
 (ert-deftest bluesky-timeline-response-deduplicates-root-parent-reply-context ()
   (let* ((bluesky-timeline-reply-display 'context)
