@@ -252,6 +252,28 @@
                            (bluesky--timeline-response-posts response))
                    '("at://did/normal/post")))))
 
+(ert-deftest bluesky-timeline-response-deduplicates-repeated-feed-posts ()
+  (let* ((bluesky-timeline-reply-display 'context)
+         (post (bluesky-test--post-view "at://did/repeated/post"))
+         (response (list :feed
+                         (vector
+                          (list :post post)
+                          (list :post post)
+                          (list :post post)))))
+    (should (equal (mapcar #'bluesky--post-uri
+                           (bluesky--timeline-response-posts response))
+                   '("at://did/repeated/post")))))
+
+(ert-deftest bluesky-append-unique-posts-deduplicates-loaded-pages ()
+  (let ((first (bluesky-test--post-view "at://did/first/post"))
+        (second (bluesky-test--post-view "at://did/second/post")))
+    (should (equal (mapcar #'bluesky--post-uri
+                           (bluesky--append-unique-posts
+                            (list first)
+                            (list first second)))
+                   '("at://did/first/post"
+                     "at://did/second/post")))))
+
 (ert-deftest bluesky-timeline-response-renders-available-reply-context ()
   (let* ((bluesky-timeline-reply-display 'context)
          (root (bluesky-test--post-view "at://did/root/post"))

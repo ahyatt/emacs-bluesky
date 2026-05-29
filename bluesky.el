@@ -1076,6 +1076,16 @@ SEEN is updated when POST has a URI."
         (append posts (list post)))
     (append posts (list post))))
 
+(defun bluesky--append-unique-posts (posts new-posts)
+  "Return POSTS with NEW-POSTS appended, skipping duplicate post URIs."
+  (let ((seen (make-hash-table :test #'equal))
+        (result posts))
+    (dolist (post posts)
+      (when-let* ((uri (bluesky--post-uri post)))
+        (puthash uri t seen)))
+    (dolist (post new-posts result)
+      (setq result (bluesky--append-unique-post result post seen)))))
+
 (defun bluesky--timeline-entry-context-posts (entry)
   "Return renderable posts for timeline ENTRY with reply context."
   (let* ((post (plist-get entry :post))
@@ -1096,19 +1106,22 @@ SEEN is updated when POST has a URI."
 (defun bluesky--timeline-response-posts (response)
   "Return home timeline post views from RESPONSE.
 Reply entries are handled according to `bluesky-timeline-reply-display'."
-  (let (posts)
+  (let ((seen (make-hash-table :test #'equal))
+        posts)
     (dolist (entry (append (plist-get response :feed) nil) posts)
       (let ((entry-post (plist-get entry :post)))
         (pcase bluesky-timeline-reply-display
           ('hide
            (unless (plist-get entry :reply)
-             (setq posts (append posts (list entry-post)))))
+             (setq posts
+                   (bluesky--append-unique-post posts entry-post seen))))
           ('context
-           (setq posts
-                 (append posts
-                         (bluesky--timeline-entry-context-posts entry))))
+           (dolist (post (bluesky--timeline-entry-context-posts entry))
+             (setq posts
+                   (bluesky--append-unique-post posts post seen))))
           (_
-           (setq posts (append posts (list entry-post)))))))))
+           (setq posts
+                 (bluesky--append-unique-post posts entry-post seen))))))))
 
 (defun bluesky--post-record-notification-p (notification)
   "Return non-nil when NOTIFICATION contains an app.bsky.feed.post record."
@@ -1198,7 +1211,7 @@ the next selected-post highlight should not move point."
        (lambda (response)
          (vui-batch
           (vui-set-state :cursor (plist-get response :cursor)))
-         (append posts (funcall page-posts response)))
+         (bluesky--append-unique-posts posts (funcall page-posts response)))
        :error))
     nil)
   (vui-vstack
