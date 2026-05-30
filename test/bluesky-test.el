@@ -173,6 +173,54 @@
                      bluesky-activate-or-open-thread))
     (should (equal (command-modes command) '(bluesky-mode)))))
 
+(ert-deftest bluesky-post-action-update-adjusts-viewer-and-counts ()
+  (let* ((post (list :uri "at://did/post/1"
+                     :likeCount 2
+                     :repostCount 3
+                     :viewer (list :like nil
+                                   :repost nil
+                                   :bookmarked :json-false)))
+         (liked (bluesky--post-with-updated-action
+                 post 'like t "at://did/like/1"))
+         (unliked (bluesky--post-with-updated-action
+                   liked 'like nil nil))
+         (reposted (bluesky--post-with-updated-action
+                    post 'repost t "at://did/repost/1"))
+         (bookmarked (bluesky--post-with-updated-action
+                      post 'bookmark t nil)))
+    (should (equal (plist-get liked :likeCount) 3))
+    (should (equal (plist-get (plist-get liked :viewer) :like)
+                   "at://did/like/1"))
+    (should (equal (plist-get unliked :likeCount) 2))
+    (should-not (plist-get (plist-get unliked :viewer) :like))
+    (should (equal (plist-get reposted :repostCount) 4))
+    (should (equal (plist-get (plist-get reposted :viewer) :repost)
+                   "at://did/repost/1"))
+    (should (eq (plist-get (plist-get bookmarked :viewer) :bookmarked) t))))
+
+(ert-deftest bluesky-post-action-update-finds-quoted-posts ()
+  (let* ((quoted (list :uri "at://did/post/quoted"
+                      :cid "quoted-cid"
+                      :author (list :did "did:quoted")
+                      :value (list :text "quoted")
+                      :likeCount 4
+                      :viewer nil))
+         (post (list :uri "at://did/post/parent"
+                     :cid "parent-cid"
+                     :author (list :did "did:parent")
+                     :record (list :text "parent")
+                     :embed (list :record quoted)))
+         (updated (bluesky--update-post-view
+                   post
+                   "at://did/post/quoted"
+                   (lambda (current-post)
+                     (bluesky--post-with-updated-action
+                      current-post 'like t "at://did/like/quoted"))))
+         (updated-quote (plist-get (plist-get updated :embed) :record)))
+    (should (equal (plist-get updated-quote :likeCount) 5))
+    (should (equal (plist-get (plist-get updated-quote :viewer) :like)
+                   "at://did/like/quoted"))))
+
 (ert-deftest bluesky-entry-commands-remain-global ()
   (dolist (command '(bluesky
                      bluesky-author
