@@ -153,16 +153,18 @@ that navigable item."
 (defun bluesky-ui-relative-time (timestr)
   "Transform TIMESTR to a relative time string for showing users.
 TIMESTR is a string such as 2024-11-29T22:31:30.465Z."
-  (let* ((time (date-to-time timestr))
-         (now (current-time))
-         (diff (time-subtract now time))
-         (diff-seconds (time-to-seconds diff)))
-    (cond
-     ((< diff-seconds 60) "just now")
-     ((< diff-seconds 3600) (format "%d minutes ago" (/ diff-seconds 60)))
-     ((< diff-seconds 86400) (format "%d hours ago" (/ diff-seconds 3600)))
-     ((< diff-seconds 604800) (format "%d days ago" (/ diff-seconds 86400)))
-     (t (format-time-string "%Y-%m-%d" time)))))
+  (if (not timestr)
+      "unknown time"
+    (let* ((time (date-to-time timestr))
+           (now (current-time))
+           (diff (time-subtract now time))
+           (diff-seconds (time-to-seconds diff)))
+      (cond
+       ((< diff-seconds 60) "just now")
+       ((< diff-seconds 3600) (format "%d minutes ago" (/ diff-seconds 60)))
+       ((< diff-seconds 86400) (format "%d hours ago" (/ diff-seconds 3600)))
+       ((< diff-seconds 604800) (format "%d days ago" (/ diff-seconds 86400)))
+       (t (format-time-string "%Y-%m-%d" time))))))
 
 (defun bluesky-ui--nodes (&rest items)
   "Return a flat list of non-nil VUI nodes from ITEMS."
@@ -638,6 +640,20 @@ AUTHOR-DID is the DID of the author of the post."
    (bluesky-ui-embed host (or view-embed (plist-get record :embed))
                      author-did depth)))
 
+(defun bluesky-ui-record-text (record)
+  "Return a VUI node for RECORD's text."
+  (bluesky-ui--fragment
+   (bluesky-ui-text-with-facets (or (plist-get record :text) "")
+                                (plist-get record :facets))
+   (vui-newline)))
+
+(defun bluesky-ui--unavailable-post-text (post)
+  "Return display text for an unavailable POST view."
+  (pcase (plist-get post :$type)
+    ("app.bsky.feed.defs#blockedPost" "[blocked post]")
+    ("app.bsky.feed.defs#notFoundPost" "[post not found]")
+    (_ "[post unavailable]")))
+
 (defun bluesky-ui-post (host post &optional item-id depth)
   "Return a VUI node for POST from HOST."
   (let* ((record (plist-get post :record))
@@ -645,25 +661,43 @@ AUTHOR-DID is the DID of the author of the post."
          (author-did (plist-get author :did))
          (depth (or depth 0)))
     (let ((bluesky-ui--item-id (or item-id (bluesky-model-post-id post))))
-      (vui-vstack
-       :indent (* 2 depth)
-       (bluesky-ui--separator depth)
-       (bluesky-ui--fragment
-        (when bluesky-ui--quoted-post
-          (bluesky-ui--fragment
-           (bluesky-ui--text "Quoted post" :face 'bluesky-quote-label)
-           (vui-newline)))
-        (bluesky-ui-author author)
-        (vui-space)
-        (bluesky-ui--text "|" :face 'bluesky-time)
-        (vui-space)
-        (bluesky-ui--text (bluesky-ui-relative-time (plist-get record :createdAt))
-                          :face 'bluesky-time))
-       (bluesky-ui-labels post)
-       (bluesky-ui-record host record author-did depth (plist-get post :embed))
-       (bluesky-ui--text (bluesky-ui--stats-text post)
-                         :face 'bluesky-post-stats)
-       (bluesky-ui--text "")))))
+      (if (not record)
+          (vui-vstack
+           :indent (* 2 depth)
+           (bluesky-ui--separator depth)
+           (when bluesky-ui--quoted-post
+             (bluesky-ui--fragment
+              (bluesky-ui--text "Quoted post" :face 'bluesky-quote-label)
+              (vui-newline)))
+           (when author
+             (bluesky-ui-author author))
+           (bluesky-ui--text (bluesky-ui--unavailable-post-text post)
+                             :face 'bluesky-author-attribute)
+           (bluesky-ui--text ""))
+        (vui-vstack
+         :indent (* 2 depth)
+         (bluesky-ui--separator depth)
+         (bluesky-ui--fragment
+          (when bluesky-ui--quoted-post
+            (bluesky-ui--fragment
+             (bluesky-ui--text "Quoted post" :face 'bluesky-quote-label)
+             (vui-newline)))
+          (bluesky-ui-author author)
+          (vui-space)
+          (bluesky-ui--text "|" :face 'bluesky-time)
+          (vui-space)
+          (bluesky-ui--text (bluesky-ui-relative-time
+                             (plist-get record :createdAt))
+                            :face 'bluesky-time))
+         (bluesky-ui-labels post)
+         (bluesky-ui-record-text record)
+         (bluesky-ui--text (bluesky-ui--stats-text post)
+                           :face 'bluesky-post-stats)
+         (bluesky-ui-embed host
+                           (or (plist-get post :embed)
+                               (plist-get record :embed))
+                           author-did depth)
+         (bluesky-ui--text ""))))))
 
 (provide 'bluesky-ui)
 ;;; bluesky-ui.el ends here

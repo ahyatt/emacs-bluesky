@@ -110,6 +110,14 @@ parent posts supplied by the feed entry, when available."
     (t :inherit highlight :extend t))
   "Face for the currently selected Bluesky post.")
 
+(defface bluesky-new-post
+  '((((class color) (background dark))
+     :background "#243b2d" :extend t)
+    (((class color) (background light))
+     :background "#e8f6e8" :extend t)
+    (t :inherit secondary-selection :extend t))
+  "Face for posts introduced by the most recent Bluesky load.")
+
 (defvar-local bluesky--navigation-override-mode nil
   "Non-nil when Bluesky navigation keys should override minor modes.")
 
@@ -169,6 +177,9 @@ parent posts supplied by the feed entry, when available."
 
 (defvar-local bluesky-current-post-overlay nil
   "Overlay or overlays highlighting the current Bluesky post.")
+
+(defvar-local bluesky-new-post-overlays nil
+  "Overlays highlighting posts introduced by the most recent load.")
 
 (defvar-local bluesky--syncing-selection-from-point nil
   "Non-nil while point movement is updating Bluesky selection state.")
@@ -556,6 +567,33 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
                   bounds-list))
     (unless preserve-point
       (goto-char (caar bounds-list)))))
+
+(defun bluesky--clear-new-post-overlays ()
+  "Delete overlays highlighting newly loaded posts."
+  (dolist (overlay bluesky-new-post-overlays)
+    (when (and (overlayp overlay) (overlay-buffer overlay))
+      (delete-overlay overlay)))
+  (setq bluesky-new-post-overlays nil))
+
+(defun bluesky--highlight-new-posts (item-ids)
+  "Highlight newly loaded posts identified by ITEM-IDS."
+  (bluesky--clear-new-post-overlays)
+  (dolist (item-id item-ids)
+    (dolist (bounds (bluesky--item-bounds item-id))
+      (let ((overlay (make-overlay (car bounds) (cdr bounds))))
+        (overlay-put overlay 'face 'bluesky-new-post)
+        (overlay-put overlay 'priority 5)
+        (push overlay bluesky-new-post-overlays)))))
+
+(defun bluesky--schedule-new-post-highlights (item-ids)
+  "Highlight newly loaded ITEM-IDS after the current render cycle settles."
+  (let ((buffer (current-buffer)))
+    (run-with-timer
+     0.05 nil
+     (lambda ()
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (bluesky--highlight-new-posts item-ids)))))))
 
 (defun bluesky--schedule-highlight (item-id &optional preserve-point)
   "Highlight ITEM-ID after the current render cycle settles.
@@ -1210,6 +1248,10 @@ POST, when present, is used to build a friendlier buffer name."
   "Return POST's timeline display depth."
   (or (plist-get post :bluesky-timeline-depth) 0))
 
+(defun bluesky--feed-post-new-p (post)
+  "Return non-nil when POST was introduced by the most recent load."
+  (plist-get post :bluesky-new-post))
+
 (defun bluesky--flatten-feed-posts (posts)
   "Return flattened render items for POSTS, honoring timeline depths."
   (let ((seen (make-hash-table :test #'equal))
@@ -1247,6 +1289,35 @@ POST, when present, is used to build a friendlier buffer name."
   "Return a copy of POST annotated for display at DEPTH."
   (plist-put (copy-sequence post) :bluesky-timeline-depth depth))
 
+(defun bluesky--post-with-new-marker (post new)
+  "Return a copy of POST with its transient new marker set to NEW."
+  (plist-put (copy-sequence post) :bluesky-new-post new))
+
+(defun bluesky--clear-new-post-markers (posts)
+  "Return copies of POSTS with transient new markers cleared."
+  (mapcar (lambda (post) (bluesky--post-with-new-marker post nil)) posts))
+
+(defun bluesky--seen-post-uris (posts)
+  "Return a hash table of URIs in POSTS."
+  (let ((seen (make-hash-table :test #'equal)))
+    (dolist (post posts seen)
+      (when-let* ((uri (bluesky--post-uri post)))
+        (puthash uri t seen)))))
+
+(defun bluesky--replace-posts-mark-new (old-posts new-posts)
+  "Return NEW-POSTS with only posts absent from OLD-POSTS marked new.
+No posts are marked new when OLD-POSTS is nil, which covers initial loads."
+  (if (null old-posts)
+      (bluesky--clear-new-post-markers new-posts)
+    (let ((seen (bluesky--seen-post-uris old-posts)))
+      (mapcar
+       (lambda (post)
+         (bluesky--post-with-new-marker
+          post
+          (let ((uri (bluesky--post-uri post)))
+            (and uri (not (gethash uri seen))))))
+       new-posts))))
+
 (defun bluesky--unique-post-additions (new-posts seen)
   "Return unique posts from NEW-POSTS, updating SEEN.
 Timeline depths are recomputed within each visible chain after duplicates are
@@ -1265,32 +1336,20 @@ skipped."
           (setq next-depth (1+ next-depth)))))))
 
 (defun bluesky--append-unique-posts (posts new-posts)
-  "Return POSTS with NEW-POSTS appended, skipping duplicate standalone posts.
-Reply context chains are preserved even when their root or parent posts already
-appeared earlier in the feed."
-  (let ((seen-standalone (make-hash-table :test #'equal))
+  "Return POSTS with NEW-POSTS appended, skipping duplicate post URIs."
+  (let ((seen (make-hash-table :test #'equal))
+        (existing (bluesky--clear-new-post-markers posts))
         additions)
     (dolist (post posts)
-      (when (zerop (bluesky--feed-post-depth post))
-        (when-let* ((uri (bluesky--post-uri post)))
-          (puthash uri t seen-standalone))))
-    (while new-posts
-      (let* ((post (pop new-posts))
-             (uri (bluesky--post-uri post))
-             (starts-chain (and (zerop (bluesky--feed-post-depth post))
-                                new-posts
-                                (> (bluesky--feed-post-depth (car new-posts))
-                                   0))))
-        (unless (and uri
-                     (not starts-chain)
-                     (zerop (bluesky--feed-post-depth post))
-                     (gethash uri seen-standalone))
-          (when (and uri
-                     (zerop (bluesky--feed-post-depth post))
-                     (not starts-chain))
-            (puthash uri t seen-standalone))
-          (push post additions))))
-    (append posts (nreverse additions))))
+      (when-let* ((uri (bluesky--post-uri post)))
+        (puthash uri t seen)))
+    (dolist (post new-posts)
+      (let ((uri (bluesky--post-uri post)))
+        (unless (and uri (gethash uri seen))
+          (when uri
+            (puthash uri t seen))
+          (push (bluesky--post-with-new-marker post t) additions))))
+    (append existing (nreverse additions))))
 
 (defun bluesky--timeline-entry-context-posts (entry)
   "Return renderable posts for timeline ENTRY with reply context."
@@ -1313,6 +1372,7 @@ appeared earlier in the feed."
   "Return home timeline post views from RESPONSE.
 Reply entries are handled according to `bluesky-timeline-reply-display'."
   (let ((seen-entries (make-hash-table :test #'equal))
+        (seen-posts (make-hash-table :test #'equal))
         additions)
     (cl-labels ((seen-entry-p (entry)
                   (when-let* ((uri (bluesky--post-uri (plist-get entry :post))))
@@ -1320,7 +1380,11 @@ Reply entries are handled according to `bluesky-timeline-reply-display'."
                       (puthash uri t seen-entries))))
                 (collect (new-posts)
                   (dolist (post new-posts)
-                    (push post additions))))
+                    (let ((uri (bluesky--post-uri post)))
+                      (unless (and uri (gethash uri seen-posts))
+                        (when uri
+                          (puthash uri t seen-posts))
+                        (push post additions))))))
       (dolist (entry (append (plist-get response :feed) nil)
                      (nreverse additions))
         (unless (seen-entry-p entry)
@@ -1434,11 +1498,20 @@ the next selected-post highlight should not move point."
       (bluesky--remember-post-authors posts)
       nil)
     (vui-use-effect (posts selected-id)
-      (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
+      (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items))
+            (new-ids (mapcar
+                      (lambda (item) (plist-get item :id))
+                      (seq-filter
+                       (lambda (item)
+                         (and (plist-get item :render)
+                              (bluesky--feed-post-new-p
+                               (plist-get item :post))))
+                       current-items))))
         (vui-batch
          (vui-set-state :items current-items)
          (when (and ids (not (member selected-id ids)))
-           (vui-set-state :selected-id (car ids)))))
+           (vui-set-state :selected-id (car ids))))
+        (bluesky--schedule-new-post-highlights new-ids))
       nil))
   (vui-use-effect (selected-id items)
     (bluesky--schedule-highlight selected-id preserve-next-highlight)
@@ -1453,9 +1526,10 @@ the next selected-post highlight should not move point."
      (funcall fetch-page nil)
      :posts
      (lambda (response)
-       (vui-batch
-        (vui-set-state :cursor (plist-get response :cursor)))
-       (funcall page-posts response))
+       (let ((new-posts (funcall page-posts response)))
+         (vui-batch
+          (vui-set-state :cursor (plist-get response :cursor)))
+         (bluesky--replace-posts-mark-new posts new-posts)))
      :error)
     nil)
   (vui-use-effect (extend-requested)
