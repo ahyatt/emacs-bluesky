@@ -659,11 +659,14 @@ AUTHOR-DID is the DID of the author of the post."
   (let* ((record (plist-get post :record))
          (author (plist-get post :author))
          (author-did (plist-get author :did))
-         (depth (or depth 0)))
-    (let ((bluesky-ui--item-id (or item-id (bluesky-model-post-id post))))
+         (depth (or depth 0))
+         (post-prefix (or bluesky-ui--line-prefix
+                          (and (> depth 0)
+                               (make-string (* 2 depth) ?\s)))))
+    (let ((bluesky-ui--item-id (or item-id (bluesky-model-post-id post)))
+          (bluesky-ui--line-prefix post-prefix))
       (if (not record)
           (vui-vstack
-           :indent (* 2 depth)
            (bluesky-ui--separator depth)
            (when bluesky-ui--quoted-post
              (bluesky-ui--fragment
@@ -675,7 +678,6 @@ AUTHOR-DID is the DID of the author of the post."
                              :face 'bluesky-author-attribute)
            (bluesky-ui--text ""))
         (vui-vstack
-         :indent (* 2 depth)
          (bluesky-ui--separator depth)
          (bluesky-ui--fragment
           (when bluesky-ui--quoted-post

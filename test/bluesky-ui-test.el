@@ -81,6 +81,24 @@
     (should (string-match-p "nested reply" rendered))
     (should-not (string-match-p "Quoted post" rendered))))
 
+(ert-deftest bluesky-ui-thread-depth-sets-line-prefix ()
+  (with-temp-buffer
+    (vui-render
+     (bluesky-ui-post nil
+                      (bluesky-ui-test--post
+                       "at://did/reply/post"
+                       "first paragraph\n\nsecond paragraph")
+                      nil
+                      2)
+     (current-buffer))
+    (goto-char (point-min))
+    (search-forward "first paragraph")
+    (should (equal (get-text-property (match-beginning 0) 'line-prefix)
+                   "    "))
+    (search-forward "second paragraph")
+    (should (equal (get-text-property (match-beginning 0) 'line-prefix)
+                   "    "))))
+
 (ert-deftest bluesky-ui-quoted-post-renders-quote-label ()
   (let ((rendered (bluesky-ui-test--render-string
                    (let ((bluesky-ui--item-id "parent"))
