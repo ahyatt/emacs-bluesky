@@ -34,6 +34,17 @@
                       :displayName "Author")
         :record (list :text text :createdAt "2026-05-20T00:00:00Z")))
 
+(defun bluesky-ui-test--record-view (uri text)
+  "Return a minimal embedded record view with URI and TEXT."
+  (list :$type "app.bsky.embed.record#viewRecord"
+        :uri uri
+        :cid (concat uri "-cid")
+        :author (list :did "did:plc:quoted"
+                      :handle "quoted.test"
+                      :displayName "Quoted")
+        :value (list :text text
+                     :createdAt "2026-05-20T00:00:00Z")))
+
 (defun bluesky-ui-test--render-string (node)
   "Render NODE into a temp buffer and return its text."
   (with-temp-buffer
@@ -81,6 +92,36 @@
                       0)))))
     (should (string-match-p "embedded quote" rendered))
     (should (string-match-p "Quoted post" rendered))))
+
+(ert-deftest bluesky-ui-relative-time-handles-missing-time ()
+  (should (equal (bluesky-ui-relative-time nil) "unknown time")))
+
+(ert-deftest bluesky-ui-blocked-post-renders-placeholder ()
+  (let* ((post (list :$type "app.bsky.feed.defs#blockedPost"
+                     :uri "at://did/blocked/post"
+                     :author (list :did "did:plc:blocked")))
+         (rendered (bluesky-ui-test--render-string
+                    (bluesky-ui-post nil post))))
+    (should (string-match-p "\\[blocked post\\]" rendered))))
+
+(ert-deftest bluesky-ui-post-stats-render-before-quoted-record ()
+  (let* ((quote (bluesky-ui-test--record-view
+                 "at://did/quote/post"
+                 "quoted child"))
+         (post (append
+                (bluesky-ui-test--post "at://did/root/post" "parent text")
+                (list :replyCount 1
+                      :repostCount 2
+                      :quoteCount 3
+                      :likeCount 4
+                      :embed (list :$type "app.bsky.embed.record#view"
+                                   :record quote))))
+         (rendered (bluesky-ui-test--render-string
+                    (bluesky-ui-post nil post))))
+    (should (string-match-p "parent text" rendered))
+    (should (string-match-p "Quoted post" rendered))
+    (should (< (string-match-p "1 reply  |  2 reposts" rendered)
+               (string-match-p "Quoted post" rendered)))))
 
 (provide 'bluesky-ui-test)
 
