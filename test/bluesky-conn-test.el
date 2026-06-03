@@ -65,7 +65,7 @@
                  (setq args call-args)
                  "timestamp")))
       (should (equal (bluesky-conn--created-at) "timestamp"))
-      (should (equal args '("%Y-%m-%dT%H:%M:%SZ" nil t))))))
+      (should (equal args '("%FT%TZ" nil t))))))
 
 (ert-deftest bluesky-conn-record-includes-embed ()
   (let ((record (bluesky-conn-record

@@ -57,7 +57,7 @@ the Bluesky API.")
     (while args
       (let ((key (pop args))
             (value (pop args)))
-        (unless (null value)
+        (when value
           (push key cleaned)
           (push (bluesky-conn--clean-value value) cleaned))))
     (nreverse cleaned)))
@@ -323,7 +323,7 @@ COLLECTION is the collection to post to, and RECORD is the record, created by
 
 (defun bluesky-conn--created-at ()
   "Return the current time as an AT Protocol datetime in UTC."
-  (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
+  (format-time-string "%FT%TZ" nil t))
 
 (defun bluesky-conn-record (text langs facets &optional reply embed)
   "Return an app.bsky.feed.post record for TEXT.
