@@ -125,6 +125,17 @@ parent posts supplied by the feed entry, when available."
   (make-sparse-keymap)
   "High-precedence keymap for Bluesky navigation.")
 
+(let ((map bluesky--navigation-override-map))
+  (define-key map (kbd "j") #'bluesky-feed-next-post)
+  (define-key map (kbd "k") #'bluesky-feed-previous-post)
+  (define-key map (kbd "n") #'bluesky-compose-post)
+  (define-key map (kbd "o") #'bluesky-open-current)
+  (define-key map (kbd "L") #'bluesky-toggle-like)
+  (define-key map (kbd "R") #'bluesky-toggle-repost)
+  (define-key map (kbd "b") #'bluesky-toggle-bookmark)
+  (define-key map (kbd "r") #'bluesky-reply)
+  (define-key map (kbd "RET") nil))
+
 (add-to-list 'emulation-mode-map-alists
              `((bluesky--navigation-override-mode
                 . ,bluesky--navigation-override-map)))
@@ -133,27 +144,18 @@ parent posts supplied by the feed entry, when available."
   (make-sparse-keymap)
   "Keymap for Bluesky feed mode.")
 
-(define-key bluesky--navigation-override-map (kbd "j") #'bluesky-feed-next-post)
-(define-key bluesky--navigation-override-map (kbd "k") #'bluesky-feed-previous-post)
-(define-key bluesky--navigation-override-map (kbd "n") #'bluesky-compose-post)
-(define-key bluesky--navigation-override-map (kbd "o") #'bluesky-open-current)
-(define-key bluesky--navigation-override-map (kbd "L") #'bluesky-toggle-like)
-(define-key bluesky--navigation-override-map (kbd "R") #'bluesky-toggle-repost)
-(define-key bluesky--navigation-override-map (kbd "b") #'bluesky-toggle-bookmark)
-(define-key bluesky--navigation-override-map (kbd "r") #'bluesky-reply)
-(define-key bluesky--navigation-override-map (kbd "RET") nil)
-
-(define-key bluesky-mode-map (kbd "g") #'bluesky-feed-refresh)
-(define-key bluesky-mode-map (kbd "j") #'bluesky-feed-next-post)
-(define-key bluesky-mode-map (kbd "k") #'bluesky-feed-previous-post)
-(define-key bluesky-mode-map (kbd "l") #'bluesky-feed-extend)
-(define-key bluesky-mode-map (kbd "n") #'bluesky-compose-post)
-(define-key bluesky-mode-map (kbd "o") #'bluesky-open-current)
-(define-key bluesky-mode-map (kbd "L") #'bluesky-toggle-like)
-(define-key bluesky-mode-map (kbd "R") #'bluesky-toggle-repost)
-(define-key bluesky-mode-map (kbd "b") #'bluesky-toggle-bookmark)
-(define-key bluesky-mode-map (kbd "r") #'bluesky-reply)
-(define-key bluesky-mode-map (kbd "RET") #'bluesky-activate-or-open-thread)
+(let ((map bluesky-mode-map))
+  (define-key map (kbd "g") #'bluesky-feed-refresh)
+  (define-key map (kbd "j") #'bluesky-feed-next-post)
+  (define-key map (kbd "k") #'bluesky-feed-previous-post)
+  (define-key map (kbd "l") #'bluesky-feed-extend)
+  (define-key map (kbd "n") #'bluesky-compose-post)
+  (define-key map (kbd "o") #'bluesky-open-current)
+  (define-key map (kbd "L") #'bluesky-toggle-like)
+  (define-key map (kbd "R") #'bluesky-toggle-repost)
+  (define-key map (kbd "b") #'bluesky-toggle-bookmark)
+  (define-key map (kbd "r") #'bluesky-reply)
+  (define-key map (kbd "RET") #'bluesky-activate-or-open-thread))
 
 (define-derived-mode bluesky-mode vui-mode "Bluesky"
   "Major mode for Bluesky buffers consisting of lists of posts."
@@ -876,7 +878,7 @@ like and repost actions."
       updated)))
 
 (defun bluesky--update-notification-post (notification target-uri updater)
-  "Return NOTIFICATION with its post record updated when it matches TARGET-URI."
+  "Return NOTIFICATION updated with UPDATER when it matches TARGET-URI."
   (if (equal (plist-get notification :uri) target-uri)
       (let* ((post (bluesky--notification-post notification))
              (updated-post (and post
@@ -1416,7 +1418,8 @@ Reply entries are handled according to `bluesky-timeline-reply-display'."
                       (bluesky-model-thread-items thread))))
 
 (defun bluesky--timeline-entry-resolve-thread-context (host handle entry)
-  "Return a future resolving ENTRY's missing reply context."
+  "Return a future resolving ENTRY's missing reply context from HOST.
+HANDLE identifies the user whose home timeline is being resolved."
   (if (not (bluesky--timeline-entry-needs-thread-context-p entry))
       (futur-done entry)
     (futur-bind
@@ -1432,7 +1435,8 @@ Reply entries are handled according to `bluesky-timeline-reply-display'."
        entry))))
 
 (defun bluesky--timeline-response-resolve-reply-context (host handle response)
-  "Return a future for RESPONSE with missing home-timeline reply context."
+  "Return a future for RESPONSE with missing reply context from HOST.
+HANDLE identifies the user whose home timeline is being resolved."
   (let ((entries (append (plist-get response :feed) nil)))
     (futur-bind
      (apply #'futur-list

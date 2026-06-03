@@ -67,13 +67,14 @@ not font styling such as bold, italics, underline, strike-through, or code."
   (make-sparse-keymap)
   "Keymap for composing Bluesky posts.")
 
-(define-key bluesky-post-mode-map (kbd "C-c C-c") #'bluesky-post-submit)
-(define-key bluesky-post-mode-map (kbd "C-c C-k") #'bluesky-post-cancel)
-(define-key bluesky-post-mode-map (kbd "C-c C-f") #'bluesky-post-cycle-format)
-(define-key bluesky-post-mode-map (kbd "C-c C-r") #'bluesky-post-cycle-reply-policy)
-(define-key bluesky-post-mode-map (kbd "C-c C-e") #'bluesky-post-toggle-embedding)
-(define-key bluesky-post-mode-map (kbd "C-c C-a") #'bluesky-post-add-media)
-(define-key bluesky-post-mode-map (kbd "C-c C-d") #'bluesky-post-clear-media)
+(let ((map bluesky-post-mode-map))
+  (define-key map (kbd "C-c C-c") #'bluesky-post-submit)
+  (define-key map (kbd "C-c C-k") #'bluesky-post-cancel)
+  (define-key map (kbd "C-c C-f") #'bluesky-post-cycle-format)
+  (define-key map (kbd "C-c C-r") #'bluesky-post-cycle-reply-policy)
+  (define-key map (kbd "C-c C-e") #'bluesky-post-toggle-embedding)
+  (define-key map (kbd "C-c C-a") #'bluesky-post-add-media)
+  (define-key map (kbd "C-c C-d") #'bluesky-post-clear-media))
 
 (defvar-local bluesky-post-host nil
   "Host used by the current compose buffer.")
@@ -609,7 +610,8 @@ Bluesky cannot represent as rich-text facets."
        (bluesky-post--uploaded-video (car media) (car blobs))))))
 
 (defun bluesky-post--upload-media-future (host handle media)
-  "Return a future resolving to an embed after uploading MEDIA."
+  "Return a future resolving to an embed after uploading MEDIA to HOST.
+HANDLE identifies the repository that should receive the uploaded blobs."
   (if media
       (futur-bind
        (apply #'futur-list

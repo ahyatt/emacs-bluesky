@@ -164,7 +164,7 @@ TIMESTR is a string such as 2024-11-29T22:31:30.465Z."
        ((< diff-seconds 3600) (format "%d minutes ago" (/ diff-seconds 60)))
        ((< diff-seconds 86400) (format "%d hours ago" (/ diff-seconds 3600)))
        ((< diff-seconds 604800) (format "%d days ago" (/ diff-seconds 86400)))
-       (t (format-time-string "%Y-%m-%d" time))))))
+       (t (format-time-string "%F" time))))))
 
 (defun bluesky-ui--nodes (&rest items)
   "Return a flat list of non-nil VUI nodes from ITEMS."
