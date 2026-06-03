@@ -30,6 +30,12 @@ the lexicons.
   character counting, rich-text conversion, and post/thread gate options.
 - Do not put posting UI back into minibuffer prompts. Posts and replies should
   go through `bluesky-post-mode`.
+- Timeline reply context should preserve conversation structure. If an ancestor
+  post has already been rendered, later loaded descendants should be attached
+  under that original ancestor rather than shown as an unrelated adjacent item.
+- Newly loaded timeline posts should use the `bluesky-new-post` background only
+  for the most recent load. Loading or refreshing another page should clear the
+  previous new-post background and mark only the newest additions.
 
 ## AT Protocol Model
 

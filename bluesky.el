@@ -1276,6 +1276,22 @@ POST, when present, is used to build a friendlier buffer name."
   "Return POST's record-level reply reference, if present."
   (plist-get (plist-get post :record) :reply))
 
+(defun bluesky--strong-ref-uri (ref)
+  "Return the AT URI from strong REF, if present."
+  (plist-get ref :uri))
+
+(defun bluesky--post-reply-parent-uri (post)
+  "Return POST's record-level reply parent URI, if present."
+  (bluesky--strong-ref-uri (plist-get (bluesky--post-reply-ref post) :parent)))
+
+(defun bluesky--post-context-parent-uri (post)
+  "Return POST's timeline context parent URI hint, if present."
+  (plist-get post :bluesky-context-parent-uri))
+
+(defun bluesky--post-contextual-p (post)
+  "Return non-nil when POST was introduced as timeline reply context."
+  (plist-get post :bluesky-context-post))
+
 (defun bluesky--timeline-entry-reply-p (entry)
   "Return non-nil when ENTRY is a reply in either feed or record metadata."
   (or (plist-get entry :reply)
@@ -1291,9 +1307,71 @@ POST, when present, is used to build a friendlier buffer name."
   "Return a copy of POST annotated for display at DEPTH."
   (plist-put (copy-sequence post) :bluesky-timeline-depth depth))
 
+(defun bluesky--post-with-context-parent (post parent-uri)
+  "Return a copy of POST annotated with timeline context PARENT-URI."
+  (let ((copy (copy-sequence post)))
+    (setq copy (plist-put copy :bluesky-context-post t))
+    (plist-put copy :bluesky-context-parent-uri parent-uri)))
+
 (defun bluesky--post-with-new-marker (post new)
   "Return a copy of POST with its transient new marker set to NEW."
   (plist-put (copy-sequence post) :bluesky-new-post new))
+
+(defun bluesky--post-known-parent-uri (post post-table)
+  "Return POST's visible parent URI using POST-TABLE, when known.
+Record-level reply parents are preferred.  Timeline context parent hints are a
+fallback for partial app-view context, where the exact parent is not available
+in the loaded posts."
+  (when (bluesky--post-contextual-p post)
+    (let ((record-parent (bluesky--post-reply-parent-uri post))
+          (context-parent (bluesky--post-context-parent-uri post)))
+      (or (and record-parent
+               (gethash record-parent post-table)
+               record-parent)
+          (and context-parent
+               (gethash context-parent post-table)
+               context-parent)))))
+
+(defun bluesky--arrange-post-tree (posts)
+  "Return unique POSTS arranged so context descendants follow shown ancestors.
+The result is still a flat list of post views, but `:bluesky-timeline-depth' is
+recomputed from contextual parent links instead of preserved from the input."
+  (let ((post-table (make-hash-table :test #'equal))
+        ordered roots)
+    (dolist (post posts)
+      (let ((uri (bluesky--post-uri post)))
+        (unless (and uri (gethash uri post-table))
+          (when uri
+            (puthash uri post post-table))
+          (push post ordered))))
+    (setq ordered (nreverse ordered))
+    (let ((children (make-hash-table :test #'equal)))
+      (dolist (post ordered)
+        (let ((uri (bluesky--post-uri post))
+              (parent-uri (bluesky--post-known-parent-uri post post-table)))
+          (if (and uri parent-uri (not (equal parent-uri uri)))
+              (puthash parent-uri
+                       (append (gethash parent-uri children) (list post))
+                       children)
+            (push post roots))))
+      (let (result
+            (rendered (make-hash-table :test #'equal)))
+        (cl-labels ((emit
+                     (post depth)
+                     (let ((uri (bluesky--post-uri post)))
+                       (unless (and uri (gethash uri rendered))
+                         (when uri
+                           (puthash uri t rendered))
+                         (push (bluesky--post-with-timeline-depth post depth)
+                               result)
+                         (when uri
+                           (dolist (child (gethash uri children))
+                             (emit child (1+ depth))))))))
+          (dolist (root (nreverse roots))
+            (emit root 0))
+          (dolist (post ordered)
+            (emit post 0)))
+        (nreverse result)))))
 
 (defun bluesky--clear-new-post-markers (posts)
   "Return copies of POSTS with transient new markers cleared."
@@ -1310,32 +1388,17 @@ POST, when present, is used to build a friendlier buffer name."
   "Return NEW-POSTS with only posts absent from OLD-POSTS marked new.
 No posts are marked new when OLD-POSTS is nil, which covers initial loads."
   (if (null old-posts)
-      (bluesky--clear-new-post-markers new-posts)
+      (bluesky--arrange-post-tree
+       (bluesky--clear-new-post-markers new-posts))
     (let ((seen (bluesky--seen-post-uris old-posts)))
-      (mapcar
-       (lambda (post)
-         (bluesky--post-with-new-marker
-          post
-          (let ((uri (bluesky--post-uri post)))
-            (and uri (not (gethash uri seen))))))
-       new-posts))))
-
-(defun bluesky--unique-post-additions (new-posts seen)
-  "Return unique posts from NEW-POSTS, updating SEEN.
-Timeline depths are recomputed within each visible chain after duplicates are
-skipped."
-  (let ((next-depth 0)
-        additions)
-    (dolist (post new-posts (nreverse additions))
-      (when (zerop (bluesky--feed-post-depth post))
-        (setq next-depth 0))
-      (let ((uri (bluesky--post-uri post)))
-        (unless (and uri (gethash uri seen))
-          (when uri
-            (puthash uri t seen))
-          (push (bluesky--post-with-timeline-depth post next-depth)
-                additions)
-          (setq next-depth (1+ next-depth)))))))
+      (bluesky--arrange-post-tree
+       (mapcar
+        (lambda (post)
+          (bluesky--post-with-new-marker
+           post
+           (let ((uri (bluesky--post-uri post)))
+             (and uri (not (gethash uri seen))))))
+        new-posts)))))
 
 (defun bluesky--append-unique-posts (posts new-posts)
   "Return POSTS with NEW-POSTS appended, skipping duplicate post URIs."
@@ -1351,7 +1414,22 @@ skipped."
           (when uri
             (puthash uri t seen))
           (push (bluesky--post-with-new-marker post t) additions))))
-    (append existing (nreverse additions))))
+    (bluesky--arrange-post-tree (append existing (nreverse additions)))))
+
+(defun bluesky--context-chain-posts (posts)
+  "Return unique POSTS annotated with timeline context parent hints."
+  (let ((seen (make-hash-table :test #'equal))
+        previous-uri
+        result)
+    (dolist (post posts (nreverse result))
+      (let ((uri (bluesky--post-uri post)))
+        (unless (and uri (gethash uri seen))
+          (when uri
+            (puthash uri t seen))
+          (push (bluesky--post-with-context-parent post previous-uri)
+                result))
+        (when uri
+          (setq previous-uri uri))))))
 
 (defun bluesky--timeline-entry-context-posts (entry)
   "Return renderable posts for timeline ENTRY with reply context."
@@ -1360,35 +1438,25 @@ skipped."
          (root (plist-get reply :root))
          (parent (plist-get reply :parent))
          (thread-context (plist-get entry :bluesky-thread-context-posts))
-         (seen (make-hash-table :test #'equal))
-         (depth -1))
-    (bluesky--unique-post-additions
-     (mapcar (lambda (context-post)
-               (setq depth (1+ depth))
-               (bluesky--post-with-timeline-depth context-post depth))
-             (or thread-context
-                 (delq nil (list root parent post))))
-     seen)))
+         (context-posts (or thread-context
+                            (delq nil (list root parent post)))))
+    (if (or reply thread-context)
+        (bluesky--context-chain-posts context-posts)
+      (list post))))
 
 (defun bluesky--timeline-response-posts (response)
   "Return home timeline post views from RESPONSE.
 Reply entries are handled according to `bluesky-timeline-reply-display'."
   (let ((seen-entries (make-hash-table :test #'equal))
-        (seen-posts (make-hash-table :test #'equal))
         additions)
     (cl-labels ((seen-entry-p (entry)
                   (when-let* ((uri (bluesky--post-uri (plist-get entry :post))))
                     (prog1 (gethash uri seen-entries)
                       (puthash uri t seen-entries))))
                 (collect (new-posts)
-                  (dolist (post new-posts)
-                    (let ((uri (bluesky--post-uri post)))
-                      (unless (and uri (gethash uri seen-posts))
-                        (when uri
-                          (puthash uri t seen-posts))
-                        (push post additions))))))
+                  (setq additions (append additions new-posts))))
       (dolist (entry (append (plist-get response :feed) nil)
-                     (nreverse additions))
+                     (bluesky--arrange-post-tree additions))
         (unless (seen-entry-p entry)
           (let ((entry-post (plist-get entry :post)))
             (pcase bluesky-timeline-reply-display
@@ -1403,12 +1471,32 @@ Reply entries are handled according to `bluesky-timeline-reply-display'."
               (_
                (collect (list entry-post))))))))))
 
+(defun bluesky--timeline-entry-context-skips-ancestors-p (entry)
+  "Return non-nil when ENTRY's app-view context skips known reply ancestors."
+  (let* ((reply (plist-get entry :reply))
+         (root (plist-get reply :root))
+         (parent (plist-get reply :parent))
+         (post (plist-get entry :post))
+         (root-uri (bluesky--post-uri root))
+         (parent-uri (bluesky--post-uri parent))
+         (post-parent-uri (bluesky--post-reply-parent-uri post))
+         (parent-parent-uri (bluesky--post-reply-parent-uri parent)))
+    (or (and post-parent-uri
+             parent-uri
+             (not (equal post-parent-uri parent-uri)))
+        (and root-uri
+             parent-uri
+             (not (equal root-uri parent-uri))
+             parent-parent-uri
+             (not (equal root-uri parent-parent-uri))))))
+
 (defun bluesky--timeline-entry-needs-thread-context-p (entry)
   "Return non-nil when ENTRY needs a thread fetch for reply context."
   (and (eq bluesky-timeline-reply-display 'context)
        (not (plist-get entry :bluesky-thread-context-posts))
        (bluesky--post-reply-ref (plist-get entry :post))
-       (not (bluesky--timeline-entry-complete-reply-context-p entry))
+       (or (not (bluesky--timeline-entry-complete-reply-context-p entry))
+           (bluesky--timeline-entry-context-skips-ancestors-p entry))
        (plist-get (plist-get entry :post) :uri)))
 
 (defun bluesky--thread-context-posts (thread)
