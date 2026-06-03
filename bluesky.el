@@ -7,7 +7,7 @@
 ;; Homepage: https://github.com/ahyatt/emacs-bluesky
 ;; Package-Requires: ((emacs "30.1") (plz "0.9.0") (futur "1.7") (vui "1.0.0"))
 ;; Keywords: outlines, hypermedia
-;; Version: 0.1.0
+;; Version: 0.1.1
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;;
 ;; This program is free software; you can redistribute it and/or
@@ -890,7 +890,7 @@ like and repost actions."
                 (plist-put updated :record
                            (plist-get updated-post :record)))
           (dolist (prop '(:viewer :replyCount :repostCount :quoteCount
-                          :likeCount))
+                                  :likeCount))
             (when (plist-member updated-post prop)
               (setq updated
                     (plist-put updated prop (plist-get updated-post prop))))))
@@ -1357,16 +1357,16 @@ recomputed from contextual parent links instead of preserved from the input."
       (let (result
             (rendered (make-hash-table :test #'equal)))
         (cl-labels ((emit
-                     (post depth)
-                     (let ((uri (bluesky--post-uri post)))
-                       (unless (and uri (gethash uri rendered))
-                         (when uri
-                           (puthash uri t rendered))
-                         (push (bluesky--post-with-timeline-depth post depth)
-                               result)
-                         (when uri
-                           (dolist (child (reverse (gethash uri children)))
-                             (emit child (1+ depth))))))))
+                      (post depth)
+                      (let ((uri (bluesky--post-uri post)))
+                        (unless (and uri (gethash uri rendered))
+                          (when uri
+                            (puthash uri t rendered))
+                          (push (bluesky--post-with-timeline-depth post depth)
+                                result)
+                          (when uri
+                            (dolist (child (reverse (gethash uri children)))
+                              (emit child (1+ depth))))))))
           (dolist (root (nreverse roots))
             (emit root 0))
           (dolist (post ordered)
