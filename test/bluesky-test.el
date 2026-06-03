@@ -367,6 +367,41 @@
                            (bluesky--timeline-response-posts response))
                    '(0 1)))))
 
+(ert-deftest bluesky-timeline-response-attaches-context-to-earlier-ancestor ()
+  (let* ((bluesky-timeline-reply-display 'context)
+         (root (bluesky-test--post-view "at://did/root/post"))
+         (unrelated (bluesky-test--post-view "at://did/unrelated/post"))
+         (parent (bluesky-test--reply-post-view
+                  "at://did/parent/post"
+                  (bluesky--post-uri root)
+                  (bluesky--post-uri root)))
+         (child (bluesky-test--reply-post-view
+                 "at://did/child/post"
+                 (bluesky--post-uri root)
+                 (bluesky--post-uri parent)))
+         (grandchild (bluesky-test--reply-post-view
+                      "at://did/grandchild/post"
+                      (bluesky--post-uri root)
+                      (bluesky--post-uri child)))
+         (response (list :feed
+                         (vector
+                          (list :post root)
+                          (list :post unrelated)
+                          (list :post grandchild
+                                :reply (list :root root :parent child))
+                          (list :post parent
+                                :reply (list :root root :parent root))))))
+    (should (equal (mapcar #'bluesky--post-uri
+                           (bluesky--timeline-response-posts response))
+                   '("at://did/root/post"
+                     "at://did/parent/post"
+                     "at://did/child/post"
+                     "at://did/grandchild/post"
+                     "at://did/unrelated/post")))
+    (should (equal (mapcar #'bluesky--feed-post-depth
+                           (bluesky--timeline-response-posts response))
+                   '(0 1 2 3 0)))))
+
 (ert-deftest bluesky-append-unique-posts-deduplicates-loaded-pages ()
   (let ((first (bluesky-test--post-view "at://did/first/post"))
         (second (bluesky-test--post-view "at://did/second/post")))
@@ -412,14 +447,15 @@
 
 (ert-deftest bluesky-append-unique-posts-deduplicates-context-roots ()
   (let* ((root (bluesky-test--post-view "at://did/root/post"))
-         (parent (bluesky-test--post-view "at://did/parent/post"))
-         (reply (bluesky-test--post-view "at://did/reply/post"))
+         (parent (bluesky--post-with-context-parent
+                  (bluesky-test--post-view "at://did/parent/post")
+                  (bluesky--post-uri root)))
+         (reply (bluesky--post-with-context-parent
+                 (bluesky-test--post-view "at://did/reply/post")
+                 (bluesky--post-uri parent)))
          (posts (bluesky--append-unique-posts
-                 (list (bluesky--post-with-timeline-depth root 0)
-                       (bluesky--post-with-timeline-depth parent 1))
-                 (list (bluesky--post-with-timeline-depth root 0)
-                       (bluesky--post-with-timeline-depth parent 1)
-                       (bluesky--post-with-timeline-depth reply 2)))))
+                 (list root parent)
+                 (list root parent reply))))
     (should (equal (mapcar #'bluesky--post-uri posts)
                    '("at://did/root/post"
                      "at://did/parent/post"
@@ -491,6 +527,51 @@
                        '("at://did/root/post"
                          "at://did/parent/post"
                          "at://did/reply/post")))))))
+
+(ert-deftest bluesky-timeline-response-resolves-context-that-skips-ancestors ()
+  (let* ((bluesky-timeline-reply-display 'context)
+         (root (bluesky-test--post-view "at://did/root/post"))
+         (parent (bluesky-test--reply-post-view
+                  "at://did/parent/post"
+                  (bluesky--post-uri root)
+                  (bluesky--post-uri root)))
+         (child (bluesky-test--reply-post-view
+                 "at://did/child/post"
+                 (bluesky--post-uri root)
+                 (bluesky--post-uri parent)))
+         (reply (bluesky-test--reply-post-view
+                 "at://did/reply/post"
+                 (bluesky--post-uri root)
+                 (bluesky--post-uri child)))
+         (response (list :feed
+                         (vector
+                          (list :post reply
+                                :reply (list :root root :parent child)))))
+         fetched)
+    (cl-letf (((symbol-function 'bluesky-conn-get-post-thread)
+               (lambda (_host _handle uri depth parent-height)
+                 (setq fetched uri)
+                 (should (= depth 0))
+                 (should (= parent-height 20))
+                 (futur-done
+                  (list :thread
+                        (list :post reply
+                              :parent (list :post child
+                                            :parent (list :post parent
+                                                          :parent (list :post root)))))))))
+      (let* ((resolved
+              (futur-blocking-wait-to-get-result
+               (bluesky--timeline-response-resolve-reply-context
+                "bsky.social" "user.test" response)))
+             (posts (bluesky--timeline-response-posts resolved)))
+        (should (equal fetched (bluesky--post-uri reply)))
+        (should (equal (mapcar #'bluesky--post-uri posts)
+                       '("at://did/root/post"
+                         "at://did/parent/post"
+                         "at://did/child/post"
+                         "at://did/reply/post")))
+        (should (equal (mapcar #'bluesky--feed-post-depth posts)
+                       '(0 1 2 3)))))))
 
 (ert-deftest bluesky-timeline-response-renders-available-reply-context ()
   (let* ((bluesky-timeline-reply-display 'context)
