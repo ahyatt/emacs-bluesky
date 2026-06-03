@@ -1351,7 +1351,7 @@ recomputed from contextual parent links instead of preserved from the input."
               (parent-uri (bluesky--post-known-parent-uri post post-table)))
           (if (and uri parent-uri (not (equal parent-uri uri)))
               (puthash parent-uri
-                       (append (gethash parent-uri children) (list post))
+                       (cons post (gethash parent-uri children))
                        children)
             (push post roots))))
       (let (result
@@ -1365,7 +1365,7 @@ recomputed from contextual parent links instead of preserved from the input."
                          (push (bluesky--post-with-timeline-depth post depth)
                                result)
                          (when uri
-                           (dolist (child (gethash uri children))
+                           (dolist (child (reverse (gethash uri children)))
                              (emit child (1+ depth))))))))
           (dolist (root (nreverse roots))
             (emit root 0))
@@ -1454,7 +1454,7 @@ Reply entries are handled according to `bluesky-timeline-reply-display'."
                     (prog1 (gethash uri seen-entries)
                       (puthash uri t seen-entries))))
                 (collect (new-posts)
-                  (setq additions (append additions new-posts))))
+                  (setq additions (nconc additions new-posts))))
       (dolist (entry (append (plist-get response :feed) nil)
                      (bluesky--arrange-post-tree additions))
         (unless (seen-entry-p entry)
