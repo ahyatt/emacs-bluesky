@@ -141,6 +141,54 @@
     (should (< (string-match-p "1 reply  |  2 reposts" rendered)
                (string-match-p "Quoted post" rendered)))))
 
+(ert-deftest bluesky-ui-post-media-renders-before-stats ()
+  (cl-letf (((symbol-function 'bluesky-ui--async-image-node)
+             (lambda (&rest _args)
+               (bluesky-ui--text "[image]"))))
+    (let* ((post (append
+                  (bluesky-ui-test--post "at://did/root/post" "parent text")
+                  (list :replyCount 1
+                        :repostCount 2
+                        :quoteCount 3
+                        :likeCount 4
+                        :embed (list :$type "app.bsky.embed.images#view"
+                                     :images
+                                     (vector (list :thumb "https://example.test/image.jpg"))))))
+           (rendered (bluesky-ui-test--render-string
+                      (bluesky-ui-post nil post))))
+      (should (string-match-p "parent text" rendered))
+      (should (string-match-p "\\[image\\]" rendered))
+      (should (< (string-match-p "\\[image\\]" rendered)
+                 (string-match-p "1 reply  |  2 reposts" rendered))))))
+
+(ert-deftest bluesky-ui-post-record-with-media-splits-around-stats ()
+  (cl-letf (((symbol-function 'bluesky-ui--async-image-node)
+             (lambda (&rest _args)
+               (bluesky-ui--text "[image]"))))
+    (let* ((quote (bluesky-ui-test--record-view
+                   "at://did/quote/post"
+                   "quoted child"))
+           (post (append
+                  (bluesky-ui-test--post "at://did/root/post" "parent text")
+                  (list :replyCount 1
+                        :repostCount 2
+                        :quoteCount 3
+                        :likeCount 4
+                        :embed
+                        (list :$type "app.bsky.embed.recordWithMedia#view"
+                              :media (list :$type "app.bsky.embed.images#view"
+                                           :images
+                                           (vector (list :thumb "https://example.test/image.jpg")))
+                              :record quote))))
+           (rendered (bluesky-ui-test--render-string
+                      (bluesky-ui-post nil post))))
+      (should (string-match-p "\\[image\\]" rendered))
+      (should (string-match-p "Quoted post" rendered))
+      (should (< (string-match-p "\\[image\\]" rendered)
+                 (string-match-p "1 reply  |  2 reposts" rendered)))
+      (should (< (string-match-p "1 reply  |  2 reposts" rendered)
+                 (string-match-p "Quoted post" rendered))))))
+
 (provide 'bluesky-ui-test)
 
 ;;; bluesky-ui-test.el ends here

@@ -601,9 +601,10 @@ HOST is accepted for symmetry with post rendering and future media handling."
          (bluesky-ui--quoted-post t))
     (bluesky-ui-post host post item-id 0)))
 
-(defun bluesky-ui-embed (host embed author-did &optional depth)
-  "Return VUI nodes for EMBED from HOST.
-AUTHOR-DID is the DID of the author of the post."
+(defun bluesky-ui-embed-body (host embed author-did &optional depth)
+  "Return VUI nodes for EMBED media from HOST.
+AUTHOR-DID is the DID of the author of the post.  Quoted records are not
+included."
   (when embed
     (let ((type (plist-get embed :$type)))
       (bluesky-ui--fragment
@@ -624,12 +625,23 @@ AUTHOR-DID is the DID of the author of the post."
                  (equal type "app.bsky.embed.video"))
          (bluesky-ui-video embed))
        (when-let* ((media (plist-get embed :media)))
-         (bluesky-ui-embed host media author-did depth))
-       (when (and (plist-get embed :media)
-                  (plist-get embed :record))
-         (vui-newline))
-       (when-let* ((record (plist-get embed :record)))
-         (bluesky-ui-embedded-record host record depth))))))
+         (bluesky-ui-embed-body host media author-did depth))))))
+
+(defun bluesky-ui-embed-record (host embed depth)
+  "Return VUI nodes for EMBED's quoted record from HOST."
+  (when-let* ((record (plist-get embed :record)))
+    (bluesky-ui-embedded-record host record depth)))
+
+(defun bluesky-ui-embed (host embed author-did &optional depth)
+  "Return VUI nodes for EMBED from HOST.
+AUTHOR-DID is the DID of the author of the post."
+  (when embed
+    (bluesky-ui--fragment
+     (bluesky-ui-embed-body host embed author-did depth)
+     (when (and (plist-get embed :media)
+                (plist-get embed :record))
+       (vui-newline))
+     (bluesky-ui-embed-record host embed depth))))
 
 (defun bluesky-ui-record (host record author-did &optional depth view-embed)
   "Return a VUI node for RECORD on HOST."
@@ -693,12 +705,16 @@ AUTHOR-DID is the DID of the author of the post."
                             :face 'bluesky-time))
          (bluesky-ui-labels post)
          (bluesky-ui-record-text record)
+         (bluesky-ui-embed-body host
+                                (or (plist-get post :embed)
+                                    (plist-get record :embed))
+                                author-did depth)
          (bluesky-ui--text (bluesky-ui--stats-text post)
                            :face 'bluesky-post-stats)
-         (bluesky-ui-embed host
-                           (or (plist-get post :embed)
-                               (plist-get record :embed))
-                           author-did depth)
+         (bluesky-ui-embed-record host
+                                  (or (plist-get post :embed)
+                                      (plist-get record :embed))
+                                  depth)
          (bluesky-ui--text ""))))))
 
 (provide 'bluesky-ui)
