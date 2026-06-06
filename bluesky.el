@@ -136,9 +136,18 @@ parent posts supplied by the feed entry, when available."
   (define-key map (kbd "r") #'bluesky-reply)
   (define-key map (kbd "RET") nil))
 
-(add-to-list 'emulation-mode-map-alists
-             `((bluesky--navigation-override-mode
-                . ,bluesky--navigation-override-map)))
+(defun bluesky--install-navigation-override-map ()
+  "Install Bluesky navigation keys before other emulation keymaps."
+  (setq emulation-mode-map-alists
+        (cons `((bluesky--navigation-override-mode
+                 . ,bluesky--navigation-override-map))
+              (cl-remove-if
+               (lambda (alist)
+                 (and (listp alist)
+                      (assq 'bluesky--navigation-override-mode alist)))
+               emulation-mode-map-alists))))
+
+(bluesky--install-navigation-override-map)
 
 (defvar bluesky-mode-map
   (make-sparse-keymap)
@@ -161,6 +170,7 @@ parent posts supplied by the feed entry, when available."
   "Major mode for Bluesky buffers consisting of lists of posts."
   (setq truncate-lines t)
   (buffer-disable-undo)
+  (bluesky--install-navigation-override-map)
   (setq-local bluesky--navigation-override-mode t)
   (add-hook 'post-command-hook #'bluesky--sync-selection-from-point nil t)
   (add-hook 'bluesky-ui-after-rerender-hook

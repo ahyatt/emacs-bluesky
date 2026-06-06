@@ -173,6 +173,23 @@
                      bluesky-activate-or-open-thread))
     (should (equal (command-modes command) '(bluesky-mode)))))
 
+(ert-deftest bluesky-navigation-override-map-takes-emulation-precedence ()
+  (let* ((other-map (let ((map (make-sparse-keymap)))
+                      (define-key map (kbd "j") #'ignore)
+                      map))
+         (emulation-mode-map-alists
+          `(((other-mode . ,other-map))
+            symbol-backed-emulation-alist
+            ((bluesky--navigation-override-mode
+              . ,bluesky--navigation-override-map)))))
+    (bluesky--install-navigation-override-map)
+    (should (eq (caaar emulation-mode-map-alists)
+                'bluesky--navigation-override-mode))
+    (should (eq (lookup-key (cdaar emulation-mode-map-alists) (kbd "j"))
+                #'bluesky-feed-next-post))
+    (should (memq 'symbol-backed-emulation-alist
+                  emulation-mode-map-alists))))
+
 (ert-deftest bluesky-post-action-update-adjusts-viewer-and-counts ()
   (let* ((post (list :uri "at://did/post/1"
                      :likeCount 2
