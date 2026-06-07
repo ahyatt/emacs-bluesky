@@ -173,6 +173,43 @@
                      bluesky-activate-or-open-thread))
     (should (equal (command-modes command) '(bluesky-mode)))))
 
+(ert-deftest bluesky-navigation-override-map-takes-emulation-precedence ()
+  (let* ((other-map (let ((map (make-sparse-keymap)))
+                      (define-key map (kbd "j") #'ignore)
+                      map))
+         (emulation-mode-map-alists
+          `(((other-mode . ,other-map))
+            symbol-backed-emulation-alist
+            ((bluesky--navigation-override-mode
+              . ,bluesky--navigation-override-map)))))
+    (bluesky--install-navigation-override-map)
+    (should (eq (caaar emulation-mode-map-alists)
+                'bluesky--navigation-override-mode))
+    (should (eq (lookup-key (cdaar emulation-mode-map-alists) (kbd "j"))
+                #'bluesky-feed-next-post))
+    (should (memq 'symbol-backed-emulation-alist
+                  emulation-mode-map-alists))))
+
+(ert-deftest bluesky-feed-navigation-does-not-rerender ()
+  (with-temp-buffer
+    (let ((items '((:id "one") (:id "two")))
+          (bluesky--selected-id "one")
+          set-state-called)
+      (insert (propertize "one\n" 'bluesky-item-id "one"))
+      (insert (propertize "two\n" 'bluesky-item-id "two"))
+      (goto-char (point-min))
+      (cl-letf (((symbol-function 'bluesky--timeline-state)
+                 (lambda (key)
+                   (pcase key
+                     (:items items)
+                     (:selected-id bluesky--selected-id))))
+                ((symbol-function 'bluesky--set-timeline-state)
+                 (lambda (&rest _args)
+                   (setq set-state-called t))))
+        (bluesky--move-selection 1)
+        (should (equal bluesky--selected-id "two"))
+        (should-not set-state-called)))))
+
 (ert-deftest bluesky-post-action-update-adjusts-viewer-and-counts ()
   (let* ((post (list :uri "at://did/post/1"
                      :likeCount 2
