@@ -237,11 +237,11 @@
 
 (ert-deftest bluesky-post-action-update-finds-quoted-posts ()
   (let* ((quoted (list :uri "at://did/post/quoted"
-                      :cid "quoted-cid"
-                      :author (list :did "did:quoted")
-                      :value (list :text "quoted")
-                      :likeCount 4
-                      :viewer nil))
+                       :cid "quoted-cid"
+                       :author (list :did "did:quoted")
+                       :value (list :text "quoted")
+                       :likeCount 4
+                       :viewer nil))
          (post (list :uri "at://did/post/parent"
                      :cid "parent-cid"
                      :author (list :did "did:parent")
