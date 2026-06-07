@@ -136,9 +136,18 @@ parent posts supplied by the feed entry, when available."
   (define-key map (kbd "r") #'bluesky-reply)
   (define-key map (kbd "RET") nil))
 
-(add-to-list 'emulation-mode-map-alists
-             `((bluesky--navigation-override-mode
-                . ,bluesky--navigation-override-map)))
+(defun bluesky--install-navigation-override-map ()
+  "Install Bluesky navigation keys before other emulation keymaps."
+  (setq emulation-mode-map-alists
+        (cons `((bluesky--navigation-override-mode
+                 . ,bluesky--navigation-override-map))
+              (cl-remove-if
+               (lambda (alist)
+                 (and (listp alist)
+                      (assq 'bluesky--navigation-override-mode alist)))
+               emulation-mode-map-alists))))
+
+(bluesky--install-navigation-override-map)
 
 (defvar bluesky-mode-map
   (make-sparse-keymap)
@@ -161,6 +170,7 @@ parent posts supplied by the feed entry, when available."
   "Major mode for Bluesky buffers consisting of lists of posts."
   (setq truncate-lines t)
   (buffer-disable-undo)
+  (bluesky--install-navigation-override-map)
   (setq-local bluesky--navigation-override-mode t)
   (add-hook 'post-command-hook #'bluesky--sync-selection-from-point nil t)
   (add-hook 'bluesky-ui-after-rerender-hook
@@ -179,6 +189,9 @@ parent posts supplied by the feed entry, when available."
 
 (defvar-local bluesky-current-post-overlay nil
   "Overlay or overlays highlighting the current Bluesky post.")
+
+(defvar-local bluesky--selected-id nil
+  "Current selected Bluesky timeline item id.")
 
 (defvar-local bluesky-new-post-overlays nil
   "Overlays highlighting posts introduced by the most recent load.")
@@ -285,8 +298,13 @@ objects seen for those identifiers.")
 
 (defun bluesky--timeline-state (key)
   "Return timeline component state KEY in the current buffer."
-  (when bluesky-feed-root
-    (plist-get (vui-instance-state bluesky-feed-root) key)))
+  (cond
+   ((eq key :selected-id)
+    (or bluesky--selected-id
+        (when bluesky-feed-root
+          (plist-get (vui-instance-state bluesky-feed-root) key))))
+   (bluesky-feed-root
+    (plist-get (vui-instance-state bluesky-feed-root) key))))
 
 (defun bluesky--selected-item ()
   "Return the selected timeline/thread item in the current buffer."
@@ -492,6 +510,12 @@ feed generators."
         (vui--current-instance bluesky-feed-root))
     (vui-set-state key value)))
 
+(defun bluesky--set-selected-id (item-id &optional preserve-point)
+  "Select ITEM-ID without rerendering the VUI component.
+PRESERVE-POINT non-nil means do not move point to ITEM-ID."
+  (setq bluesky--selected-id item-id)
+  (bluesky--highlight-selected item-id preserve-point))
+
 (defun bluesky--item-id-at-point ()
   "Return the Bluesky item id at point, if any."
   (get-text-property (point) 'bluesky-item-id))
@@ -529,8 +553,7 @@ item.  If point is already on an item, return that item."
     (unless (equal item-id (bluesky--timeline-state :selected-id))
       (let ((bluesky--syncing-selection-from-point t))
         (setq bluesky--selection-from-point-preserve-next-highlight t)
-        (bluesky--set-timeline-state :selected-id item-id)
-        (bluesky--highlight-selected item-id t)))))
+        (bluesky--set-selected-id item-id t)))))
 
 (defun bluesky--item-bounds (item-id)
   "Return buffer bounds for each rendered range of navigable ITEM-ID."
@@ -613,21 +636,21 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
   (when (and (bound-and-true-p bluesky-feed-root)
              (buffer-live-p (current-buffer)))
     (bluesky--schedule-highlight
-     (plist-get (vui-instance-state bluesky-feed-root) :selected-id))))
+     (bluesky--timeline-state :selected-id))))
 
 (defun bluesky--highlight-current-now ()
   "Immediately reapply the highlight for the current selected timeline item."
   (when (and (bound-and-true-p bluesky-feed-root)
              (buffer-live-p (current-buffer)))
     (bluesky--highlight-selected
-     (plist-get (vui-instance-state bluesky-feed-root) :selected-id))))
+     (bluesky--timeline-state :selected-id))))
 
 (defun bluesky--highlight-current-after-ui-rerender ()
   "Reapply selection highlight after a UI-driven rerender."
   (when (and (bound-and-true-p bluesky-feed-root)
              (buffer-live-p (current-buffer)))
     (bluesky--highlight-selected
-     (plist-get (vui-instance-state bluesky-feed-root) :selected-id)
+     (bluesky--timeline-state :selected-id)
      t)))
 
 (defun bluesky--move-selection (delta)
@@ -649,8 +672,7 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
       (user-error "No posts loaded"))
     (let ((next-id (nth next-index ids)))
       (setq bluesky--selection-from-point-preserve-next-highlight nil)
-      (bluesky--set-timeline-state :selected-id next-id)
-      (bluesky--highlight-selected next-id)
+      (bluesky--set-selected-id next-id)
       (bluesky--schedule-highlight next-id))))
 
 (defun bluesky-feed-refresh ()
@@ -1589,7 +1611,7 @@ the next selected-post highlight should not move point."
     (vui-use-effect (posts)
       (bluesky--remember-post-authors posts)
       nil)
-    (vui-use-effect (posts selected-id)
+    (vui-use-effect (posts)
       (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items))
             (new-ids (mapcar
                       (lambda (item) (plist-get item :id))
@@ -1600,13 +1622,18 @@ the next selected-post highlight should not move point."
                                (plist-get item :post))))
                        current-items))))
         (vui-batch
-         (vui-set-state :items current-items)
-         (when (and ids (not (member selected-id ids)))
-           (vui-set-state :selected-id (car ids))))
+         (vui-set-state :items current-items))
+        (when (and ids (not (member (bluesky--timeline-state :selected-id) ids)))
+          (setq bluesky--selected-id
+                (if (and selected-id (member selected-id ids))
+                    selected-id
+                  (car ids))))
         (bluesky--schedule-new-post-highlights new-ids))
       nil))
-  (vui-use-effect (selected-id items)
-    (bluesky--schedule-highlight selected-id preserve-next-highlight)
+  (vui-use-effect (items)
+    (bluesky--schedule-highlight
+     (bluesky--timeline-state :selected-id)
+     preserve-next-highlight)
     (when preserve-next-highlight
       (setq bluesky--selection-from-point-preserve-next-highlight nil))
     nil)
@@ -1675,16 +1702,19 @@ mirror `bluesky--render-paged-feed'."
       (dolist (notification notifications)
         (bluesky--remember-author (plist-get notification :author)))
       nil)
-    (vui-use-effect (notifications selected-id)
+    (vui-use-effect (notifications)
       (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
         (vui-batch
-         (vui-set-state :items current-items)
-         (when (and ids (not (member selected-id ids)))
-           (vui-set-state :selected-id (car ids)))))
+         (vui-set-state :items current-items))
+        (when (and ids (not (member (bluesky--timeline-state :selected-id) ids)))
+          (setq bluesky--selected-id
+                (if (and selected-id (member selected-id ids))
+                    selected-id
+                  (car ids)))))
       nil))
-  (vui-use-effect (selected-id items)
+  (vui-use-effect (items)
     (bluesky--schedule-highlight
-     selected-id
+     (bluesky--timeline-state :selected-id)
      bluesky--selection-from-point-preserve-next-highlight)
     (setq bluesky--selection-from-point-preserve-next-highlight nil)
     nil)
@@ -1877,16 +1907,19 @@ mirror `bluesky--render-paged-feed'."
         (dolist (item current-items)
           (bluesky--remember-author (plist-get (plist-get item :post) :author)))
         nil)
-      (vui-use-effect (thread selected-id)
+      (vui-use-effect (thread)
         (let ((ids (mapcar (lambda (item) (plist-get item :id)) current-items)))
           (vui-batch
-           (vui-set-state :items current-items)
-           (when (and ids (not (member selected-id ids)))
-             (vui-set-state :selected-id (car ids)))))
+           (vui-set-state :items current-items))
+          (when (and ids (not (member (bluesky--timeline-state :selected-id) ids)))
+            (setq bluesky--selected-id
+                  (if (and selected-id (member selected-id ids))
+                      selected-id
+                    (car ids)))))
         nil))
-    (vui-use-effect (selected-id items)
+    (vui-use-effect (items)
       (bluesky--schedule-highlight
-       selected-id
+       (bluesky--timeline-state :selected-id)
        bluesky--selection-from-point-preserve-next-highlight)
       (setq bluesky--selection-from-point-preserve-next-highlight nil)
       nil)
