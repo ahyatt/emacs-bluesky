@@ -190,6 +190,26 @@
     (should (memq 'symbol-backed-emulation-alist
                   emulation-mode-map-alists))))
 
+(ert-deftest bluesky-feed-navigation-does-not-rerender ()
+  (with-temp-buffer
+    (let ((items '((:id "one") (:id "two")))
+          (bluesky--selected-id "one")
+          set-state-called)
+      (insert (propertize "one\n" 'bluesky-item-id "one"))
+      (insert (propertize "two\n" 'bluesky-item-id "two"))
+      (goto-char (point-min))
+      (cl-letf (((symbol-function 'bluesky--timeline-state)
+                 (lambda (key)
+                   (pcase key
+                     (:items items)
+                     (:selected-id bluesky--selected-id))))
+                ((symbol-function 'bluesky--set-timeline-state)
+                 (lambda (&rest _args)
+                   (setq set-state-called t))))
+        (bluesky--move-selection 1)
+        (should (equal bluesky--selected-id "two"))
+        (should-not set-state-called)))))
+
 (ert-deftest bluesky-post-action-update-adjusts-viewer-and-counts ()
   (let* ((post (list :uri "at://did/post/1"
                      :likeCount 2
@@ -217,11 +237,11 @@
 
 (ert-deftest bluesky-post-action-update-finds-quoted-posts ()
   (let* ((quoted (list :uri "at://did/post/quoted"
-                      :cid "quoted-cid"
-                      :author (list :did "did:quoted")
-                      :value (list :text "quoted")
-                      :likeCount 4
-                      :viewer nil))
+                       :cid "quoted-cid"
+                       :author (list :did "did:quoted")
+                       :value (list :text "quoted")
+                       :likeCount 4
+                       :viewer nil))
          (post (list :uri "at://did/post/parent"
                      :cid "parent-cid"
                      :author (list :did "did:parent")
