@@ -258,6 +258,49 @@
     (should (equal (plist-get (plist-get updated-quote :viewer) :like)
                    "at://did/like/quoted"))))
 
+(ert-deftest bluesky-post-action-updates-rendered-stats-without-rerender ()
+  (let* ((post (list :uri "at://did/post/1"
+                     :replyCount 0
+                     :repostCount 0
+                     :quoteCount 0
+                     :likeCount 2
+                     :viewer nil))
+         (old-stats (bluesky-ui--stats-text post))
+         (root (vui-instance--create
+                :state (list :posts (list post)
+                             :items (list (list :id "item-1"
+                                                :post post
+                                                :render t)))))
+         set-state-called
+         rerender-called)
+    (with-temp-buffer
+      (setq-local bluesky-feed-root root)
+      (insert (propertize old-stats
+                          'bluesky-item-id "item-1"
+                          'face 'bluesky-post-stats))
+      (cl-letf (((symbol-function 'vui-set-state)
+                 (lambda (&rest _args)
+                   (setq set-state-called t)))
+                ((symbol-function 'vui-rerender)
+                 (lambda (&rest _args)
+                   (setq rerender-called t))))
+        (funcall (bluesky--local-post-action-callback post 'like t)
+                 (list :uri "at://did/like/1")))
+      (should-not set-state-called)
+      (should-not rerender-called)
+      (should-not (search-forward old-stats nil t))
+      (goto-char (point-min))
+      (should (search-forward
+               "0 replies  |  0 reposts  |  0 quotes  |  3 likes  |  liked"
+               nil t))
+      (let* ((state (vui-instance-state root))
+             (updated-post (car (plist-get state :posts)))
+             (updated-item-post (plist-get (car (plist-get state :items)) :post)))
+        (should (equal (plist-get updated-post :likeCount) 3))
+        (should (equal (plist-get (plist-get updated-post :viewer) :like)
+                       "at://did/like/1"))
+        (should (equal (plist-get updated-item-post :likeCount) 3))))))
+
 (ert-deftest bluesky-entry-commands-remain-global ()
   (dolist (command '(bluesky
                      bluesky-author
