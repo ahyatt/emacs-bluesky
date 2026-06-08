@@ -920,32 +920,80 @@ like and repost actions."
     notification))
 
 (defun bluesky--update-current-post-state (target-uri updater)
-  "Update TARGET-URI in the active Bluesky component state with UPDATER."
+  "Update TARGET-URI in the active Bluesky component state with UPDATER.
+Return a list of display updates shaped as (ITEM-ID OLD-STATS NEW-STATS)."
   (when (and target-uri bluesky-feed-root)
-    (let ((state (vui-instance-state bluesky-feed-root))
-          (vui--root-instance bluesky-feed-root)
-          (vui--current-instance bluesky-feed-root))
-      (vui-batch
-       (when (plist-member state :posts)
-         (vui-set-state
-          :posts
-          (lambda (posts)
-            (mapcar (lambda (post)
-                      (bluesky--update-post-view post target-uri updater))
-                    posts))))
-       (when (plist-member state :thread)
-         (vui-set-state
-          :thread
-          (lambda (thread)
-            (bluesky--update-thread-posts thread target-uri updater))))
-       (when (plist-member state :notifications)
-         (vui-set-state
-          :notifications
-          (lambda (notifications)
-            (mapcar (lambda (notification)
-                      (bluesky--update-notification-post
-                       notification target-uri updater))
-                    notifications))))))))
+    (let* ((state (copy-sequence (vui-instance-state bluesky-feed-root)))
+           (items (plist-get state :items))
+           display-updates)
+      (when (plist-member state :posts)
+        (setq state
+              (plist-put
+               state :posts
+               (mapcar (lambda (post)
+                         (bluesky--update-post-view post target-uri updater))
+                       (plist-get state :posts)))))
+      (when (plist-member state :thread)
+        (setq state
+              (plist-put state :thread
+                         (bluesky--update-thread-posts
+                          (plist-get state :thread) target-uri updater))))
+      (when (plist-member state :notifications)
+        (setq state
+              (plist-put
+               state :notifications
+               (mapcar (lambda (notification)
+                         (bluesky--update-notification-post
+                          notification target-uri updater))
+                       (plist-get state :notifications)))))
+      (when items
+        (setq state
+              (plist-put
+               state :items
+               (mapcar
+                (lambda (item)
+                  (let* ((post (plist-get item :post))
+                         (updated-post
+                          (bluesky--update-post-view post target-uri updater))
+                         (updated-item (copy-sequence item)))
+                    (when updated-post
+                      (setq updated-item
+                            (plist-put updated-item :post updated-post))
+                      (let ((old-stats (and post (bluesky-ui--stats-text post)))
+                            (new-stats (bluesky-ui--stats-text updated-post)))
+                        (when (and old-stats
+                                   (not (equal old-stats new-stats)))
+                          (push (list (plist-get item :id)
+                                      old-stats
+                                      new-stats)
+                                display-updates))))
+                    updated-item))
+                items))))
+      (setf (vui-instance-state bluesky-feed-root) state)
+      (nreverse display-updates))))
+
+(defun bluesky--replace-post-stats (item-id old-stats new-stats)
+  "Replace OLD-STATS with NEW-STATS in the rendered ITEM-ID ranges."
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (dolist (bounds (bluesky--item-bounds item-id))
+        (let ((end (copy-marker (cdr bounds) t)))
+          (unwind-protect
+              (progn
+                (goto-char (car bounds))
+                (while (search-forward old-stats end t)
+                  (let ((props (text-properties-at (match-beginning 0)))
+                        (start (match-beginning 0)))
+                    (replace-match "" t t)
+                    (goto-char start)
+                    (insert (apply #'propertize new-stats props)))))
+            (set-marker end nil)))))))
+
+(defun bluesky--apply-post-action-display-updates (updates)
+  "Apply rendered stats UPDATES returned by `bluesky--update-current-post-state'."
+  (dolist (update updates)
+    (pcase-let ((`(,item-id ,old-stats ,new-stats) update))
+      (bluesky--replace-post-stats item-id old-stats new-stats))))
 
 (defun bluesky--run-post-action (description future &optional on-success)
   "Run FUTURE for a post action described by DESCRIPTION.
@@ -973,11 +1021,12 @@ ENABLED means the action was created, otherwise it was removed."
       (let ((record-uri (and enabled
                              (or (plist-get value :uri)
                                  (plist-get value :bookmark)))))
-        (bluesky--update-current-post-state
-         target-uri
-         (lambda (current-post)
-           (bluesky--post-with-updated-action
-            current-post action enabled record-uri)))))))
+        (bluesky--apply-post-action-display-updates
+         (bluesky--update-current-post-state
+          target-uri
+          (lambda (current-post)
+            (bluesky--post-with-updated-action
+             current-post action enabled record-uri))))))))
 
 (defun bluesky-toggle-like ()
   "Like or unlike the selected post."
