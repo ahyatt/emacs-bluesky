@@ -6,6 +6,12 @@ This is a Bluesky client for Emacs, capable of reading feeds, responding, postin
 
 * Installation
 
+=bluesky= is available from MELPA, so you can add MELPA to your package archives and use =use-package= to install:
+
+#+begin_src emacs-lisp
+(use-package bluesky)
+#+end_src
+
 With Emacs 30 or newer, install directly from this repository using
 =use-package= and =:vc=:
 
