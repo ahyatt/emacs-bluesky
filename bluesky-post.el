@@ -749,7 +749,8 @@ validated media plists in the same shape used by compose buffers."
              (with-current-buffer buffer
                (set-buffer-modified-p nil))
              (kill-buffer buffer))
-           (bluesky-post--refresh-source-buffer source-buffer))
+           (bluesky-post--refresh-source-buffer source-buffer)
+           nil)
          (lambda (err)
            (when (buffer-live-p buffer)
              (with-current-buffer buffer
@@ -759,7 +760,7 @@ validated media plists in the same shape used by compose buffers."
                     (if (fboundp 'bluesky--error-message)
                         (bluesky--error-message err)
                       (error-message-string err)))
-           (futur-failed err))))))))
+           nil)))))))
 
 (defun bluesky-post-cancel ()
   "Cancel the current Bluesky post."

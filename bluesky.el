@@ -7,7 +7,7 @@
 ;; Homepage: https://github.com/ahyatt/emacs-bluesky
 ;; Package-Requires: ((emacs "30.1") (plz "0.9.0") (futur "1.7") (vui "1.0.0"))
 ;; Keywords: outlines, hypermedia
-;; Version: 0.1.1
+;; Version: 0.1.2
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;;
 ;; This program is free software; you can redistribute it and/or
@@ -281,11 +281,13 @@ objects seen for those identifiers.")
      (vui-batch
       (vui-set-state state-key (funcall value-fn value))
       (vui-set-state :loading nil)
-      (vui-set-state :error nil)))
+      (vui-set-state :error nil))
+     nil)
    (vui-async-callback (err)
      (vui-batch
       (vui-set-state :loading nil)
-      (vui-set-state error-key err)))))
+      (vui-set-state error-key err))
+     nil)))
 
 (defun bluesky--error-message (err)
   "Return a readable error string for ERR."
@@ -1006,12 +1008,13 @@ ON-SUCCESS, when non-nil, is called with FUTURE's value in the source buffer."
        (when (buffer-live-p buffer)
          (with-current-buffer buffer
            (when on-success
-             (funcall on-success value)))))
+             (funcall on-success value))))
+       nil)
      (lambda (err)
        (message "Bluesky: %s failed: %s"
                 description
                 (bluesky--error-message err))
-       (futur-failed err)))))
+       nil))))
 
 (defun bluesky--local-post-action-callback (post action enabled)
   "Return a callback that applies ACTION for POST locally.
@@ -1262,11 +1265,12 @@ rendered heading and buffer label."
    (lambda (response)
      (let ((generator (bluesky--select-feed-generator
                        (plist-get response :feeds))))
-       (bluesky--open-custom-feed-timeline generator host session)))
+       (bluesky--open-custom-feed-timeline generator host session))
+     nil)
    (lambda (err)
      (message "Unable to discover Bluesky feeds: %s"
               (bluesky--error-message err))
-     (futur-failed err))))
+     nil)))
 
 (defun bluesky--open-thread-uri (uri host session &optional post)
   "Open a thread buffer for URI on HOST using SESSION.
