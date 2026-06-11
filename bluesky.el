@@ -1099,7 +1099,8 @@ USERNAME, PASSWORD, and HOST mirror `bluesky'."
         :source-buffer source-buffer))
      username
      password
-     host)))
+     host
+     t)))
 
 ;;;###autoload
 (cl-defun bluesky-post-async
@@ -2004,9 +2005,12 @@ mirror `bluesky--render-paged-feed'."
        (unless loading
          (vui-text "No thread posts loaded." :face 'bluesky-muted))))))
 
-(defun bluesky--authenticate (callback &optional username password host)
+(defun bluesky--authenticate
+    (callback &optional username password host discard-result)
   "Authenticate and call CALLBACK with host and session.
-USERNAME, PASSWORD, and HOST mirror `bluesky'."
+USERNAME, PASSWORD, and HOST mirror `bluesky'.
+When DISCARD-RESULT is non-nil, return nil from the async continuation after
+calling CALLBACK."
   (let* ((host (or host bluesky-default-host))
          (authinfo (car (auth-source-search :host host
                                             :user (or username t)
@@ -2036,26 +2040,34 @@ USERNAME, PASSWORD, and HOST mirror `bluesky'."
      (lambda (session)
        (message "Bluesky: connected as %s" (plist-get session :handle))
        (bluesky--remember-author session)
-       (funcall callback host session))
+       (let ((result (funcall callback host session)))
+         (unless discard-result
+           result)))
      (lambda (err)
        (message "Unable to connect to Bluesky: %s"
                 (bluesky--error-message err))
        (futur-failed err)))))
 
-(defun bluesky--with-session (callback &optional username password host)
+(defun bluesky--with-session
+    (callback &optional username password host discard-result)
   "Call CALLBACK with a usable host and session.
-USERNAME, PASSWORD, and HOST are optional login details."
+USERNAME, PASSWORD, and HOST are optional login details.
+When DISCARD-RESULT is non-nil, call CALLBACK for effect and return nil."
   (if (and (not username)
            (not password)
            (bound-and-true-p bluesky-feed-session))
       (progn
         (bluesky--remember-author bluesky-feed-session)
-        (funcall callback
-                 (or host
-                     (and (boundp 'bluesky-host) bluesky-host)
-                     bluesky-default-host)
-                 bluesky-feed-session))
-    (bluesky--authenticate callback username password host)))
+        (let ((result
+               (funcall callback
+                        (or host
+                            (and (boundp 'bluesky-host) bluesky-host)
+                            bluesky-default-host)
+                        bluesky-feed-session)))
+          (unless discard-result
+            result)))
+    (bluesky--authenticate
+     callback username password host discard-result)))
 
 ;;;###autoload
 (defun bluesky-author (actor &optional username password host)
@@ -2068,7 +2080,8 @@ ACTOR can be a handle or DID.  USERNAME, PASSWORD, and HOST mirror `bluesky'."
        (bluesky--open-author-timeline actor host session))
      username
      password
-     host)))
+     host
+     t)))
 
 ;;;###autoload
 (defun bluesky-search (query &optional username password host)
@@ -2081,7 +2094,8 @@ USERNAME, PASSWORD, and HOST mirror `bluesky'."
        (bluesky--open-search-timeline query host session))
      username
      password
-     host)))
+     host
+     t)))
 
 ;;;###autoload
 (defun bluesky-tag (tag &optional username password host)
@@ -2094,7 +2108,8 @@ TAG may include a leading hash.  USERNAME, PASSWORD, and HOST mirror `bluesky'."
        (bluesky--open-tag-timeline tag host session))
      username
      password
-     host)))
+     host
+     t)))
 
 ;;;###autoload
 (defun bluesky-feed (feed &optional username password host)
@@ -2111,7 +2126,8 @@ empty string to discover popular feeds.  USERNAME, PASSWORD, and HOST mirror
          (bluesky--discover-and-open-feed feed host session)))
      username
      password
-     host)))
+     host
+     t)))
 
 ;;;###autoload
 (defun bluesky-notifications (&optional username password host)
@@ -2123,7 +2139,8 @@ USERNAME, PASSWORD, and HOST mirror `bluesky'."
      (bluesky--open-notifications host session))
    username
    password
-   host))
+   host
+   t))
 
 ;;;###autoload
 (defun bluesky-likes (&optional username password host)
@@ -2136,7 +2153,8 @@ USERNAME, PASSWORD, and HOST mirror `bluesky'."
       host session (vector "like" "like-via-repost") "Likes"))
    username
    password
-   host))
+   host
+   t))
 
 ;;;###autoload
 (defun bluesky-replies (&optional username password host)
@@ -2148,7 +2166,8 @@ USERNAME, PASSWORD, and HOST mirror `bluesky'."
      (bluesky--open-notifications host session (vector "reply") "Replies"))
    username
    password
-   host))
+   host
+   t))
 
 ;;;###autoload
 (defun bluesky (&optional username password host)
@@ -2176,7 +2195,8 @@ HOST is the Bluesky server to connect to."
       session))
    username
    password
-   host))
+   host
+   t))
 
 (provide 'bluesky)
 

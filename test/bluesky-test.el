@@ -28,8 +28,9 @@
 (ert-deftest bluesky-compose-post-authenticates-outside-bluesky-buffer ()
   (let (with-session-called compose-args)
     (cl-letf (((symbol-function 'bluesky--with-session)
-               (lambda (callback &optional username password host)
-                 (setq with-session-called (list username password host))
+               (lambda (callback &optional username password host discard-result)
+                 (setq with-session-called
+                       (list username password host discard-result))
                  (funcall callback
                           "https://bsky.social"
                           (list :handle "user.test"))))
@@ -39,7 +40,7 @@
       (with-temp-buffer
         (bluesky-compose-post "user.test" "password" "https://bsky.social")))
     (should (equal with-session-called
-                   '("user.test" "password" "https://bsky.social")))
+                   '("user.test" "password" "https://bsky.social" t)))
     (should (equal (plist-get compose-args :host) "https://bsky.social"))
     (should (equal (plist-get compose-args :session)
                    '(:handle "user.test")))
@@ -61,11 +62,26 @@
         (should (eq (plist-get compose-args :source-buffer)
                     (current-buffer)))))))
 
+(ert-deftest bluesky-with-session-discards-ui-callback-result ()
+  (let ((bluesky-feed-session (list :handle "user.test"))
+        (bluesky-host "https://bsky.social"))
+    (should-not
+     (bluesky--with-session
+      (lambda (_host _session)
+        'mounted-ui)
+      nil nil nil t))
+    (should
+     (eq (bluesky--with-session
+          (lambda (_host _session)
+            'created-future))
+         'created-future))))
+
 (ert-deftest bluesky-post-async-authenticates-and-submits-text ()
   (let (with-session-called submit-args)
     (cl-letf (((symbol-function 'bluesky--with-session)
-               (lambda (callback &optional username password host)
-                 (setq with-session-called (list username password host))
+               (lambda (callback &optional username password host discard-result)
+                 (setq with-session-called
+                       (list username password host discard-result))
                  (funcall callback
                           "https://bsky.social"
                           (list :handle "user.test"))))
@@ -82,7 +98,7 @@
                                       :allow-embedding nil)
                   'created-future)))
     (should (equal with-session-called
-                   '("user.test" "password" "https://bsky.social")))
+                   '("user.test" "password" "https://bsky.social" nil)))
     (should (equal (car submit-args) "hello"))
     (should (equal (plist-get (cdr submit-args) :host) "https://bsky.social"))
     (should (equal (plist-get (cdr submit-args) :session)
