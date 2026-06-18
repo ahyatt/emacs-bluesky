@@ -301,6 +301,39 @@
       (bluesky-feed-next-post)
       (should (equal bluesky--selected-id "sibling")))))
 
+(ert-deftest bluesky-feed-navigation-keeps-visible-quoted-posts ()
+  (with-temp-buffer
+    (bluesky-mode)
+    (let* ((items '((:id "root" :depth 0 :render t)
+                    (:id "quote" :depth 1 :render nil)
+                    (:id "child" :depth 1 :render t)
+                    (:id "sibling" :depth 0 :render t)))
+           (root-pos (bluesky-test--insert-fold-block "root" 0 "root")))
+      (bluesky-test--insert-fold-block "quote" 1 "quote" "root")
+      (bluesky-test--insert-fold-block "child" 1 "child")
+      (bluesky-test--insert-fold-block "sibling" 0 "sibling")
+      (setq-local bluesky-feed-root
+                  (vui-instance--create
+                   :state (list :items items :selected-id "root")))
+      (setq-local bluesky--selected-id "root")
+      (goto-char root-pos)
+      (bluesky-toggle-thread-fold)
+      (bluesky-feed-next-post)
+      (should (equal bluesky--selected-id "quote")))))
+
+(ert-deftest bluesky-visible-item-ids-use-item-state ()
+  (let ((items '((:id "root" :depth 0 :render t)
+                 (:id "quote" :depth 1 :render nil)
+                 (:id "child" :depth 1 :render t)
+                 (:id "child-quote" :depth 2 :render nil)
+                 (:id "sibling" :depth 0 :render t)))
+        (bluesky-thread-folded-item-ids '("root")))
+    (cl-letf (((symbol-function 'bluesky--item-bounds)
+               (lambda (&rest _args)
+                 (error "Unexpected buffer scan"))))
+      (should (equal (bluesky--visible-item-ids items)
+                     '("root" "quote" "sibling"))))))
+
 (ert-deftest bluesky-post-action-update-adjusts-viewer-and-counts ()
   (let* ((post (list :uri "at://did/post/1"
                      :likeCount 2

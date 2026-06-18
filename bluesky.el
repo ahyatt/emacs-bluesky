@@ -717,20 +717,27 @@ When QUIET is non-nil, do not report leaf items."
         (bluesky--unfold-thread-item item-id)
       (bluesky--fold-thread-item item-id))))
 
-(defun bluesky--visible-item-id-p (item-id)
-  "Return non-nil when ITEM-ID has at least one visible rendered range."
-  (seq-some (lambda (bounds)
-              (not (get-char-property (car bounds) 'invisible)))
-            (bluesky--item-bounds item-id)))
-
 (defun bluesky--visible-item-ids (items)
   "Return visible item ids from ITEMS."
-  (let ((ids
-         (seq-filter
-          #'bluesky--visible-item-id-p
-          (mapcar (lambda (item) (plist-get item :id)) items))))
-    (or ids
-        (mapcar (lambda (item) (plist-get item :id)) items))))
+  (let (visible-ids
+        folded-depths
+        current-rendered-visible)
+    (dolist (item items (nreverse visible-ids))
+      (let* ((item-id (plist-get item :id))
+             (depth (or (plist-get item :depth) 0))
+             (render (or (plist-get item :render)
+                         (not (plist-member item :render)))))
+        (while (and folded-depths (<= depth (car folded-depths)))
+          (pop folded-depths))
+        (if render
+            (let ((visible (not folded-depths)))
+              (setq current-rendered-visible visible)
+              (when visible
+                (push item-id visible-ids)
+                (when (bluesky--thread-folded-p item-id)
+                  (push depth folded-depths))))
+          (when current-rendered-visible
+            (push item-id visible-ids)))))))
 
 (defun bluesky--highlight-selected (item-id &optional preserve-point)
   "Highlight ITEM-ID in the current buffer.
