@@ -125,6 +125,12 @@ Images are loaded asynchronously through `bluesky-ui--image-queue'."
 (defvar bluesky-ui--line-prefix nil
   "Display prefix applied to text nodes in the current render scope.")
 
+(defvar bluesky-ui--thread-depth nil
+  "Thread depth applied to text nodes in the current render scope.")
+
+(defvar bluesky-ui--thread-block-id nil
+  "Identifier for the rendered post block containing current text nodes.")
+
 (defvar bluesky-ui--quoted-post nil
   "Non-nil while rendering a quoted post.")
 
@@ -147,6 +153,12 @@ that navigable item."
                  (when bluesky-ui--line-prefix
                    (list 'line-prefix bluesky-ui--line-prefix
                          'wrap-prefix bluesky-ui--line-prefix))
+                 (when bluesky-ui--thread-depth
+                   (list 'bluesky-thread-depth
+                         bluesky-ui--thread-depth))
+                 (when bluesky-ui--thread-block-id
+                   (list 'bluesky-thread-block-id
+                         bluesky-ui--thread-block-id))
                  (when bluesky-ui--item-id
                    (list 'bluesky-item-id bluesky-ui--item-id)))))
 
@@ -675,8 +687,12 @@ AUTHOR-DID is the DID of the author of the post."
          (post-prefix (or bluesky-ui--line-prefix
                           (and (> depth 0)
                                (make-string (* 2 depth) ?\s)))))
-    (let ((bluesky-ui--item-id (or item-id (bluesky-model-post-id post)))
-          (bluesky-ui--line-prefix post-prefix))
+    (let* ((post-item-id (or item-id (bluesky-model-post-id post)))
+           (bluesky-ui--item-id post-item-id)
+           (bluesky-ui--line-prefix post-prefix)
+           (bluesky-ui--thread-depth depth)
+           (bluesky-ui--thread-block-id
+            (or bluesky-ui--thread-block-id post-item-id)))
       (if (not record)
           (vui-vstack
            (bluesky-ui--separator depth)
