@@ -99,6 +99,47 @@
     (should (equal (get-text-property (match-beginning 0) 'line-prefix)
                    "    "))))
 
+(ert-deftest bluesky-ui-post-sets-thread-fold-properties ()
+  (with-temp-buffer
+    (vui-render
+     (bluesky-ui-post nil
+                      (bluesky-ui-test--post
+                       "at://did/reply/post"
+                       "nested reply")
+                      "item-1"
+                      2)
+     (current-buffer))
+    (goto-char (point-min))
+    (search-forward "nested reply")
+    (should (equal (get-text-property (match-beginning 0)
+                                      'bluesky-item-id)
+                   "item-1"))
+    (should (equal (get-text-property (match-beginning 0)
+                                      'bluesky-thread-block-id)
+                   "item-1"))
+    (should (= (get-text-property (match-beginning 0)
+                                  'bluesky-thread-depth)
+               2))))
+
+(ert-deftest bluesky-ui-quoted-post-keeps-containing-fold-block ()
+  (with-temp-buffer
+    (vui-render
+     (let ((bluesky-ui--item-id "parent")
+           (bluesky-ui--thread-block-id "parent"))
+       (bluesky-ui-quoted-post
+        nil
+        (bluesky-ui-test--post "at://did/quote/post" "embedded quote")
+        0))
+     (current-buffer))
+    (goto-char (point-min))
+    (search-forward "embedded quote")
+    (should (equal (get-text-property (match-beginning 0)
+                                      'bluesky-thread-block-id)
+                   "parent"))
+    (should-not (equal (get-text-property (match-beginning 0)
+                                          'bluesky-item-id)
+                       "parent"))))
+
 (ert-deftest bluesky-ui-quoted-post-renders-quote-label ()
   (let ((rendered (bluesky-ui-test--render-string
                    (let ((bluesky-ui--item-id "parent"))

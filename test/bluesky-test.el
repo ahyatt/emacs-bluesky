@@ -185,6 +185,7 @@
                      bluesky-toggle-repost
                      bluesky-toggle-bookmark
                      bluesky-reply
+                     bluesky-toggle-thread-fold
                      bluesky-open-thread
                      bluesky-activate-or-open-thread))
     (should (equal (command-modes command) '(bluesky-mode)))))
@@ -225,6 +226,113 @@
         (bluesky--move-selection 1)
         (should (equal bluesky--selected-id "two"))
         (should-not set-state-called)))))
+
+(defun bluesky-test--insert-fold-block (item-id depth text &optional block-id)
+  "Insert foldable TEXT for ITEM-ID at DEPTH and return its start."
+  (let ((start (point)))
+    (insert (propertize (concat text "\n")
+                        'bluesky-item-id item-id
+                        'bluesky-thread-depth depth
+                        'bluesky-thread-block-id (or block-id item-id)))
+    start))
+
+(ert-deftest bluesky-toggle-thread-fold-hides-rendered-descendants ()
+  (with-temp-buffer
+    (bluesky-mode)
+    (let* ((items '((:id "root" :depth 0 :render t)
+                    (:id "quote" :depth 1 :render nil)
+                    (:id "child" :depth 1 :render t)
+                    (:id "grandchild" :depth 2 :render t)
+                    (:id "sibling" :depth 0 :render t)))
+           (root-pos (bluesky-test--insert-fold-block "root" 0 "root"))
+           (quote-pos (bluesky-test--insert-fold-block "quote" 1 "quote" "root"))
+           (child-pos (bluesky-test--insert-fold-block "child" 1 "child"))
+           (grandchild-pos
+            (bluesky-test--insert-fold-block "grandchild" 2 "grandchild"))
+           (sibling-pos (bluesky-test--insert-fold-block "sibling" 0 "sibling")))
+      (setq-local bluesky-feed-root
+                  (vui-instance--create
+                   :state (list :items items :selected-id "root")))
+      (setq-local bluesky--selected-id "root")
+      (goto-char root-pos)
+      (bluesky-toggle-thread-fold)
+      (should (member "root" bluesky-thread-folded-item-ids))
+      (should-not (get-char-property quote-pos 'invisible))
+      (should (eq (get-char-property child-pos 'invisible)
+                  'bluesky-thread-fold))
+      (should (eq (get-char-property grandchild-pos 'invisible)
+                  'bluesky-thread-fold))
+      (should-not (get-char-property sibling-pos 'invisible)))))
+
+(ert-deftest bluesky-toggle-thread-fold-unfolds-rendered-descendants ()
+  (with-temp-buffer
+    (bluesky-mode)
+    (let* ((items '((:id "root" :depth 0 :render t)
+                    (:id "child" :depth 1 :render t)))
+           (_root-pos (bluesky-test--insert-fold-block "root" 0 "root"))
+           (child-pos (bluesky-test--insert-fold-block "child" 1 "child")))
+      (setq-local bluesky-feed-root
+                  (vui-instance--create
+                   :state (list :items items :selected-id "root")))
+      (setq-local bluesky--selected-id "root")
+      (bluesky-toggle-thread-fold)
+      (should (get-char-property child-pos 'invisible))
+      (bluesky-toggle-thread-fold)
+      (should-not bluesky-thread-folded-item-ids)
+      (should-not (get-char-property child-pos 'invisible)))))
+
+(ert-deftest bluesky-feed-navigation-skips-folded-descendants ()
+  (with-temp-buffer
+    (bluesky-mode)
+    (let* ((items '((:id "root" :depth 0 :render t)
+                    (:id "child" :depth 1 :render t)
+                    (:id "grandchild" :depth 2 :render t)
+                    (:id "sibling" :depth 0 :render t)))
+           (root-pos (bluesky-test--insert-fold-block "root" 0 "root")))
+      (bluesky-test--insert-fold-block "child" 1 "child")
+      (bluesky-test--insert-fold-block "grandchild" 2 "grandchild")
+      (bluesky-test--insert-fold-block "sibling" 0 "sibling")
+      (setq-local bluesky-feed-root
+                  (vui-instance--create
+                   :state (list :items items :selected-id "root")))
+      (setq-local bluesky--selected-id "root")
+      (goto-char root-pos)
+      (bluesky-toggle-thread-fold)
+      (bluesky-feed-next-post)
+      (should (equal bluesky--selected-id "sibling")))))
+
+(ert-deftest bluesky-feed-navigation-keeps-visible-quoted-posts ()
+  (with-temp-buffer
+    (bluesky-mode)
+    (let* ((items '((:id "root" :depth 0 :render t)
+                    (:id "quote" :depth 1 :render nil)
+                    (:id "child" :depth 1 :render t)
+                    (:id "sibling" :depth 0 :render t)))
+           (root-pos (bluesky-test--insert-fold-block "root" 0 "root")))
+      (bluesky-test--insert-fold-block "quote" 1 "quote" "root")
+      (bluesky-test--insert-fold-block "child" 1 "child")
+      (bluesky-test--insert-fold-block "sibling" 0 "sibling")
+      (setq-local bluesky-feed-root
+                  (vui-instance--create
+                   :state (list :items items :selected-id "root")))
+      (setq-local bluesky--selected-id "root")
+      (goto-char root-pos)
+      (bluesky-toggle-thread-fold)
+      (bluesky-feed-next-post)
+      (should (equal bluesky--selected-id "quote")))))
+
+(ert-deftest bluesky-visible-item-ids-use-item-state ()
+  (let ((items '((:id "root" :depth 0 :render t)
+                 (:id "quote" :depth 1 :render nil)
+                 (:id "child" :depth 1 :render t)
+                 (:id "child-quote" :depth 2 :render nil)
+                 (:id "sibling" :depth 0 :render t)))
+        (bluesky-thread-folded-item-ids '("root")))
+    (cl-letf (((symbol-function 'bluesky--item-bounds)
+               (lambda (&rest _args)
+                 (error "Unexpected buffer scan"))))
+      (should (equal (bluesky--visible-item-ids items)
+                     '("root" "quote" "sibling"))))))
 
 (ert-deftest bluesky-post-action-update-adjusts-viewer-and-counts ()
   (let* ((post (list :uri "at://did/post/1"

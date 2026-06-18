@@ -56,6 +56,7 @@ This opens the timeline buffer.  In =bluesky-mode=:
 - =g= refreshes the timeline.
 - =l= loads more posts.
 - =j= and =k= move between posts.
+- =TAB= folds or unfolds replies under the selected post.
 - =RET= opens the selected post's thread.
 - =o= opens links or media from the selected post.
 - =n= opens a new post composer.

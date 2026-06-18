@@ -134,6 +134,8 @@ parent posts supplied by the feed entry, when available."
   (define-key map (kbd "R") #'bluesky-toggle-repost)
   (define-key map (kbd "b") #'bluesky-toggle-bookmark)
   (define-key map (kbd "r") #'bluesky-reply)
+  (define-key map (kbd "<TAB>") #'bluesky-toggle-thread-fold)
+  (define-key map (kbd "TAB") #'bluesky-toggle-thread-fold)
   (define-key map (kbd "RET") nil))
 
 (defun bluesky--install-navigation-override-map ()
@@ -164,6 +166,8 @@ parent posts supplied by the feed entry, when available."
   (define-key map (kbd "R") #'bluesky-toggle-repost)
   (define-key map (kbd "b") #'bluesky-toggle-bookmark)
   (define-key map (kbd "r") #'bluesky-reply)
+  (define-key map (kbd "<TAB>") #'bluesky-toggle-thread-fold)
+  (define-key map (kbd "TAB") #'bluesky-toggle-thread-fold)
   (define-key map (kbd "RET") #'bluesky-activate-or-open-thread))
 
 (define-derived-mode bluesky-mode vui-mode "Bluesky"
@@ -171,6 +175,7 @@ parent posts supplied by the feed entry, when available."
   (setq truncate-lines t)
   (buffer-disable-undo)
   (bluesky--install-navigation-override-map)
+  (add-to-invisibility-spec '(bluesky-thread-fold . t))
   (setq-local bluesky--navigation-override-mode t)
   (add-hook 'post-command-hook #'bluesky--sync-selection-from-point nil t)
   (add-hook 'bluesky-ui-after-rerender-hook
@@ -195,6 +200,12 @@ parent posts supplied by the feed entry, when available."
 
 (defvar-local bluesky-new-post-overlays nil
   "Overlays highlighting posts introduced by the most recent load.")
+
+(defvar-local bluesky-thread-fold-overlays nil
+  "Overlays hiding folded Bluesky thread descendants.")
+
+(defvar-local bluesky-thread-folded-item-ids nil
+  "Item ids whose thread descendants are folded in the current buffer.")
 
 (defvar-local bluesky--syncing-selection-from-point nil
   "Non-nil while point movement is updating Bluesky selection state.")
@@ -575,6 +586,159 @@ item.  If point is already on an item, return that item."
             (setcdr previous (max (cdr previous) (cdr bounds)))
           (push bounds coalesced))))))
 
+(defun bluesky--thread-block-bounds (block-id)
+  "Return buffer bounds for rendered post BLOCK-ID."
+  (let ((pos (point-min))
+        bounds)
+    (while (< pos (point-max))
+      (let* ((next (next-single-property-change
+                    pos 'bluesky-thread-block-id nil (point-max)))
+             (value (get-text-property pos 'bluesky-thread-block-id)))
+        (when (equal value block-id)
+          (push (cons pos next) bounds))
+        (setq pos (max (1+ pos) next))))
+    (let (coalesced)
+      (dolist (bounds (nreverse bounds) (nreverse coalesced))
+        (if-let* ((previous (car coalesced))
+                  (_ (<= (car bounds) (cdr previous))))
+            (setcdr previous (max (cdr previous) (cdr bounds)))
+          (push bounds coalesced))))))
+
+(defun bluesky--rendered-thread-items ()
+  "Return rendered timeline/thread items in display order."
+  (seq-filter (lambda (item) (plist-get item :render))
+              (bluesky--timeline-state :items)))
+
+(defun bluesky--thread-descendant-item-ids (item-id)
+  "Return rendered descendant item ids under ITEM-ID."
+  (let* ((items (bluesky--rendered-thread-items))
+         (index (cl-position item-id items
+                             :key (lambda (item) (plist-get item :id))
+                             :test #'equal))
+         (item (and index (nth index items)))
+         (depth (or (plist-get item :depth) 0))
+         descendants)
+    (when item
+      (catch 'done
+        (dolist (candidate (nthcdr (1+ index) items))
+          (let ((candidate-depth (or (plist-get candidate :depth) 0)))
+            (if (> candidate-depth depth)
+                (push (plist-get candidate :id) descendants)
+              (throw 'done nil))))))
+    (nreverse descendants)))
+
+(defun bluesky--thread-fold-range (item-id)
+  "Return buffer bounds covering rendered descendants of ITEM-ID."
+  (let (start end)
+    (dolist (descendant-id (bluesky--thread-descendant-item-ids item-id))
+      (dolist (bounds (bluesky--thread-block-bounds descendant-id))
+        (setq start (if start (min start (car bounds)) (car bounds)))
+        (setq end (if end (max end (cdr bounds)) (cdr bounds)))))
+    (when start
+      (cons start end))))
+
+(defun bluesky--delete-thread-fold-overlays (&optional item-id)
+  "Delete thread fold overlays.
+When ITEM-ID is non-nil, delete only overlays owned by that folded item."
+  (setq bluesky-thread-fold-overlays
+        (cl-remove-if
+         (lambda (overlay)
+           (let ((delete (and (overlayp overlay)
+                              (or (not item-id)
+                                  (equal item-id
+                                         (overlay-get
+                                          overlay
+                                          'bluesky-thread-fold-root))))))
+             (when delete
+               (delete-overlay overlay))
+             delete))
+         bluesky-thread-fold-overlays)))
+
+(defun bluesky--create-thread-fold-overlay (item-id)
+  "Create and remember a fold overlay for ITEM-ID's descendants."
+  (when-let* ((range (bluesky--thread-fold-range item-id)))
+    (let ((overlay (make-overlay (car range) (cdr range) nil t nil)))
+      (overlay-put overlay 'invisible 'bluesky-thread-fold)
+      (overlay-put overlay 'evaporate t)
+      (overlay-put overlay 'bluesky-thread-fold-root item-id)
+      (push overlay bluesky-thread-fold-overlays)
+      overlay)))
+
+(defun bluesky--thread-folded-p (item-id)
+  "Return non-nil when ITEM-ID's descendants are folded."
+  (member item-id bluesky-thread-folded-item-ids))
+
+(defun bluesky--fold-thread-item (item-id &optional quiet)
+  "Fold descendants under ITEM-ID.
+When QUIET is non-nil, do not report leaf items."
+  (bluesky--delete-thread-fold-overlays item-id)
+  (if (bluesky--create-thread-fold-overlay item-id)
+      (progn
+        (cl-pushnew item-id bluesky-thread-folded-item-ids :test #'equal)
+        t)
+    (unless quiet
+      (message "No thread replies to fold"))
+    nil))
+
+(defun bluesky--unfold-thread-item (item-id)
+  "Unfold descendants under ITEM-ID."
+  (setq bluesky-thread-folded-item-ids
+        (cl-remove item-id bluesky-thread-folded-item-ids :test #'equal))
+  (bluesky--delete-thread-fold-overlays item-id))
+
+(defun bluesky--reapply-thread-folds ()
+  "Recreate fold overlays after the current buffer has rerendered."
+  (when bluesky-thread-folded-item-ids
+    (let ((folded-ids bluesky-thread-folded-item-ids)
+          valid-ids)
+      (bluesky--delete-thread-fold-overlays)
+      (dolist (item-id folded-ids)
+        (when (bluesky--create-thread-fold-overlay item-id)
+          (push item-id valid-ids)))
+      (setq bluesky-thread-folded-item-ids (nreverse valid-ids)))))
+
+(defun bluesky--schedule-thread-folds ()
+  "Reapply thread folds after the current render cycle settles."
+  (let ((buffer (current-buffer)))
+    (run-with-timer
+     0.05 nil
+     (lambda ()
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (bluesky--reapply-thread-folds)))))))
+
+(defun bluesky-toggle-thread-fold ()
+  "Toggle folding of descendants under the selected thread post."
+  (interactive nil bluesky-mode)
+  (let ((item-id (bluesky--timeline-state :selected-id)))
+    (unless item-id
+      (user-error "No post selected"))
+    (if (bluesky--thread-folded-p item-id)
+        (bluesky--unfold-thread-item item-id)
+      (bluesky--fold-thread-item item-id))))
+
+(defun bluesky--visible-item-ids (items)
+  "Return visible item ids from ITEMS."
+  (let (visible-ids
+        folded-depths
+        current-rendered-visible)
+    (dolist (item items (nreverse visible-ids))
+      (let* ((item-id (plist-get item :id))
+             (depth (or (plist-get item :depth) 0))
+             (render (or (plist-get item :render)
+                         (not (plist-member item :render)))))
+        (while (and folded-depths (<= depth (car folded-depths)))
+          (pop folded-depths))
+        (if render
+            (let ((visible (not folded-depths)))
+              (setq current-rendered-visible visible)
+              (when visible
+                (push item-id visible-ids)
+                (when (bluesky--thread-folded-p item-id)
+                  (push depth folded-depths))))
+          (when current-rendered-visible
+            (push item-id visible-ids)))))))
+
 (defun bluesky--highlight-selected (item-id &optional preserve-point)
   "Highlight ITEM-ID in the current buffer.
 PRESERVE-POINT non-nil means do not move point to ITEM-ID."
@@ -651,6 +815,7 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
   "Reapply selection highlight after a UI-driven rerender."
   (when (and (bound-and-true-p bluesky-feed-root)
              (buffer-live-p (current-buffer)))
+    (bluesky--reapply-thread-folds)
     (bluesky--highlight-selected
      (bluesky--timeline-state :selected-id)
      t)))
@@ -658,7 +823,7 @@ PRESERVE-POINT non-nil means do not move point to ITEM-ID."
 (defun bluesky--move-selection (delta)
   "Move current timeline selection by DELTA."
   (let* ((items (bluesky--timeline-state :items))
-         (ids (mapcar (lambda (item) (plist-get item :id)) items))
+         (ids (bluesky--visible-item-ids items))
          (point-id (bluesky--item-id-near-point delta))
          (selected-id (or point-id (bluesky--timeline-state :selected-id)))
          (index (cl-position selected-id ids :test #'equal))
@@ -1685,6 +1850,7 @@ the next selected-post highlight should not move point."
         (bluesky--schedule-new-post-highlights new-ids))
       nil))
   (vui-use-effect (items)
+    (bluesky--schedule-thread-folds)
     (bluesky--schedule-highlight
      (bluesky--timeline-state :selected-id)
      preserve-next-highlight)
@@ -1767,6 +1933,7 @@ mirror `bluesky--render-paged-feed'."
                   (car ids)))))
       nil))
   (vui-use-effect (items)
+    (bluesky--schedule-thread-folds)
     (bluesky--schedule-highlight
      (bluesky--timeline-state :selected-id)
      bluesky--selection-from-point-preserve-next-highlight)
@@ -1972,6 +2139,7 @@ mirror `bluesky--render-paged-feed'."
                     (car ids)))))
         nil))
     (vui-use-effect (items)
+      (bluesky--schedule-thread-folds)
       (bluesky--schedule-highlight
        (bluesky--timeline-state :selected-id)
        bluesky--selection-from-point-preserve-next-highlight)
