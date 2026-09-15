@@ -155,6 +155,41 @@
 (ert-deftest bluesky-ui-relative-time-handles-missing-time ()
   (should (equal (bluesky-ui-relative-time nil) "unknown time")))
 
+(ert-deftest bluesky-ui-relative-time-uses-human-singulars ()
+  (cl-letf (((symbol-function 'current-time)
+             (lambda () (date-to-time "2026-05-21T00:00:00Z"))))
+    (should (equal (bluesky-ui-relative-time "2026-05-20T23:59:00Z")
+                   "1 minute ago"))
+    (should (equal (bluesky-ui-relative-time "2026-05-20T23:00:00Z")
+                   "1 hour ago"))
+    (should (equal (bluesky-ui-relative-time "2026-05-20T00:00:00Z")
+                   "yesterday"))))
+
+(ert-deftest bluesky-ui-notification-omits-raw-subject-uri ()
+  (let ((rendered
+         (bluesky-ui-test--render-string
+          (bluesky-ui-notification
+           nil
+           (list :author (list :handle "liker.test" :displayName "Liker")
+                 :reason "like"
+                 :reasonSubject "at://did:plc:me/app.bsky.feed.post/one"
+                 :indexedAt "2026-05-20T00:00:00Z"
+                 :isRead t)))))
+    (should (string-match-p "Liker @liker.test liked your post" rendered))
+    (should-not (string-match-p "Subject:" rendered))
+    (should-not (string-match-p "at://" rendered))))
+
+(ert-deftest bluesky-ui-post-can-omit-leading-separator ()
+  (let ((rendered
+         (bluesky-ui-test--render-string
+          (bluesky-ui-post nil
+                           (bluesky-ui-test--post
+                            "at://did:plc:me/app.bsky.feed.post/one"
+                            "the liked post")
+                           nil nil t))))
+    (should (string-match-p "the liked post" rendered))
+    (should-not (string-match-p "---" rendered))))
+
 (ert-deftest bluesky-ui-blocked-post-renders-placeholder ()
   (let* ((post (list :$type "app.bsky.feed.defs#blockedPost"
                      :uri "at://did/blocked/post"

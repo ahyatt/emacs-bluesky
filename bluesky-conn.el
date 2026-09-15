@@ -456,6 +456,16 @@ and SEEN-AT can filter by the app-view seen timestamp."
                             :priority priority
                             :seenAt seen-at))
 
+(defun bluesky-conn-get-posts (host handle uris)
+  "Get hydrated post views for URIS using HANDLE at HOST.
+URIS must contain between one and 25 post AT URIs, as required by the
+`app.bsky.feed.getPosts' lexicon."
+  (let ((count (length uris)))
+    (unless (<= 1 count 25)
+      (error "Number of posts to retrieve must be between 1 and 25")))
+  (bluesky-conn-call-authed host handle 'get "app.bsky.feed.getPosts"
+                            :uris (vconcat uris)))
+
 (defun bluesky-conn-get-actor-feeds (host handle actor &optional cursor limit)
   "Get feed generators created by ACTOR using HANDLE at HOST.
 CURSOR defines where to start, and LIMIT is the number of feeds to return."

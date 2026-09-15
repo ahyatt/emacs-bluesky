@@ -58,6 +58,29 @@
                         :priority nil
                         :seenAt nil))))))
 
+(ert-deftest bluesky-conn-get-posts-uses-repeated-uris ()
+  (let (call)
+    (cl-letf (((symbol-function 'bluesky-conn-call-authed)
+               (lambda (&rest args)
+                 (setq call args)
+                 :future)))
+      (should (eq (bluesky-conn-get-posts
+                   "bsky.social" "user.test"
+                   '("at://did:plc:user/app.bsky.feed.post/one"
+                     "at://did:plc:user/app.bsky.feed.post/two"))
+                  :future))
+      (should (equal call
+                     '("bsky.social" "user.test" get
+                       "app.bsky.feed.getPosts"
+                       :uris
+                       ["at://did:plc:user/app.bsky.feed.post/one"
+                        "at://did:plc:user/app.bsky.feed.post/two"]))))))
+
+(ert-deftest bluesky-conn-get-posts-validates-batch-size ()
+  (should-error (bluesky-conn-get-posts "host" "handle" nil))
+  (should-error
+   (bluesky-conn-get-posts "host" "handle" (make-list 26 "uri"))))
+
 (ert-deftest bluesky-conn-created-at-uses-utc ()
   (let (args)
     (cl-letf (((symbol-function 'format-time-string)

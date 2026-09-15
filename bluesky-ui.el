@@ -173,8 +173,11 @@ TIMESTR is a string such as 2024-11-29T22:31:30.465Z."
            (diff-seconds (time-to-seconds diff)))
       (cond
        ((< diff-seconds 60) "just now")
+       ((< diff-seconds 120) "1 minute ago")
        ((< diff-seconds 3600) (format "%d minutes ago" (/ diff-seconds 60)))
+       ((< diff-seconds 7200) "1 hour ago")
        ((< diff-seconds 86400) (format "%d hours ago" (/ diff-seconds 3600)))
+       ((< diff-seconds 172800) "yesterday")
        ((< diff-seconds 604800) (format "%d days ago" (/ diff-seconds 86400)))
        (t (format-time-string "%F" time))))))
 
@@ -518,8 +521,8 @@ AUTHOR-DID is the DID of the post author."
     ("starterpack-joined" "joined from your starter pack")
     ("verified" "verified you")
     ("unverified" "removed your verification")
-    ("like-via-repost" "liked your repost")
-    ("repost-via-repost" "reposted your repost")
+    ("like-via-repost" "liked a post you reposted")
+    ("repost-via-repost" "reposted a post you reposted")
     ("subscribed-post" "posted")
     ("contact-match" "matched a contact")
     (_ (or reason "notified you"))))
@@ -530,7 +533,6 @@ HOST is accepted for symmetry with post rendering and future media handling."
   (ignore host)
   (let* ((author (plist-get notification :author))
          (reason (plist-get notification :reason))
-         (subject (plist-get notification :reasonSubject))
          (is-read (bluesky-ui--json-truthy-p
                    (plist-get notification :isRead)))
          (bluesky-ui--item-id (or item-id (plist-get notification :uri))))
@@ -551,9 +553,6 @@ HOST is accepted for symmetry with post rendering and future media handling."
         (bluesky-ui--fragment
          (vui-space)
          (bluesky-ui--text "[unread]" :face 'bluesky-label))))
-     (when subject
-       (bluesky-ui--text (format "Subject: %s" subject)
-                         :face 'bluesky-post-stats))
      (bluesky-ui--text ""))))
 
 (defun bluesky-ui--separator (&optional _depth)
@@ -678,8 +677,9 @@ AUTHOR-DID is the DID of the author of the post."
     ("app.bsky.feed.defs#notFoundPost" "[post not found]")
     (_ "[post unavailable]")))
 
-(defun bluesky-ui-post (host post &optional item-id depth)
-  "Return a VUI node for POST from HOST."
+(defun bluesky-ui-post (host post &optional item-id depth omit-separator)
+  "Return a VUI node for POST from HOST.
+When OMIT-SEPARATOR is non-nil, do not draw the leading post separator."
   (let* ((record (plist-get post :record))
          (author (plist-get post :author))
          (author-did (plist-get author :did))
@@ -695,7 +695,7 @@ AUTHOR-DID is the DID of the author of the post."
             (or bluesky-ui--thread-block-id post-item-id)))
       (if (not record)
           (vui-vstack
-           (bluesky-ui--separator depth)
+           (unless omit-separator (bluesky-ui--separator depth))
            (when bluesky-ui--quoted-post
              (bluesky-ui--fragment
               (bluesky-ui--text "Quoted post" :face 'bluesky-quote-label)
@@ -706,7 +706,7 @@ AUTHOR-DID is the DID of the author of the post."
                              :face 'bluesky-author-attribute)
            (bluesky-ui--text ""))
         (vui-vstack
-         (bluesky-ui--separator depth)
+         (unless omit-separator (bluesky-ui--separator depth))
          (bluesky-ui--fragment
           (when bluesky-ui--quoted-post
             (bluesky-ui--fragment

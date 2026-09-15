@@ -1785,12 +1785,66 @@ HANDLE identifies the user whose home timeline is being resolved."
 
 (defun bluesky--notification-post (notification)
   "Return NOTIFICATION as a post-like app-view object, if possible."
-  (when (bluesky--post-record-notification-p notification)
-    (list :uri (plist-get notification :uri)
-          :cid (plist-get notification :cid)
-          :author (plist-get notification :author)
-          :record (plist-get notification :record)
-          :labels (plist-get notification :labels))))
+  (or (plist-get notification :bluesky-subject-post)
+      (when (bluesky--post-record-notification-p notification)
+        (list :uri (plist-get notification :uri)
+              :cid (plist-get notification :cid)
+              :author (plist-get notification :author)
+              :record (plist-get notification :record)
+              :labels (plist-get notification :labels)))))
+
+(defun bluesky--notification-subject-post-uris (notifications)
+  "Return unique post subject URIs found in NOTIFICATIONS."
+  (seq-uniq
+   (delq nil
+         (mapcar
+          (lambda (notification)
+            (let ((uri (plist-get notification :reasonSubject)))
+              (when (and uri
+                         (string-match-p
+                          "/app\\.bsky\\.feed\\.post/" uri))
+                uri)))
+          notifications))
+   #'equal))
+
+(defun bluesky--notification-post-batch (host handle uris)
+  "Return a future for post URIS from HOST using HANDLE.
+Resolve to nil rather than failing when the optional hydration request fails."
+  (futur-bind
+   (bluesky-conn-get-posts host handle uris)
+   (lambda (response) (append (plist-get response :posts) nil))
+   (lambda (_err) nil)))
+
+(defun bluesky--notifications-response-resolve-subject-posts
+    (host handle response)
+  "Return a future enriching notification RESPONSE with subject post views.
+HOST and HANDLE identify the authenticated AppView request."
+  (let* ((notifications (append (plist-get response :notifications) nil))
+         (uris (bluesky--notification-subject-post-uris notifications)))
+    (if (null uris)
+        (futur-done response)
+      (futur-bind
+       (apply #'futur-list
+              (mapcar (lambda (batch)
+                        (bluesky--notification-post-batch host handle batch))
+                      (seq-partition uris 25)))
+       (lambda (post-batches)
+         (let ((posts-by-uri (make-hash-table :test #'equal)))
+           (dolist (post (apply #'append post-batches))
+             (puthash (plist-get post :uri) post posts-by-uri))
+           (plist-put
+            (copy-sequence response)
+            :notifications
+            (vconcat
+             (mapcar
+              (lambda (notification)
+                (if-let* ((post
+                           (gethash (plist-get notification :reasonSubject)
+                                    posts-by-uri)))
+                    (plist-put (copy-sequence notification)
+                               :bluesky-subject-post post)
+                  notification))
+              notifications)))))))))
 
 (defun bluesky--notification-item-id (notification)
   "Return a stable item id for NOTIFICATION."
@@ -1988,7 +2042,9 @@ mirror `bluesky--render-paged-feed'."
                       (when-let* ((post (plist-get item :post)))
                         (bluesky-ui-post host
                                          post
-                                         (plist-get item :id))))))
+                                         (plist-get item :id)
+                                         nil
+                                         t)))))
                  (lambda (item) (plist-get item :id))
                  :spacing 1)
      (unless loading
@@ -2109,7 +2165,11 @@ mirror `bluesky--render-paged-feed'."
    "No notifications loaded."
    (list 'notifications host handle reasons)
    (lambda (cursor)
-     (bluesky-conn-list-notifications host handle cursor 50 reasons))
+     (futur-bind
+      (bluesky-conn-list-notifications host handle cursor 50 reasons)
+      (lambda (response)
+        (bluesky--notifications-response-resolve-subject-posts
+         host handle response))))
    notifications cursor loading error items selected-id refresh-requested
    extend-requested))
 

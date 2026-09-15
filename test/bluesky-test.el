@@ -840,6 +840,59 @@
                    '("at://did/root/post"
                      "at://did/reply/post")))))
 
+(ert-deftest bluesky-notifications-hydrate-subject-posts-in-batches ()
+  (let* ((uris (mapcar
+                (lambda (number)
+                  (format "at://did:plc:me/app.bsky.feed.post/%d" number))
+                (number-sequence 1 26)))
+         (notifications
+          (vconcat
+           (mapcar (lambda (uri)
+                     (list :uri (concat uri "-like")
+                           :reason "like"
+                           :reasonSubject uri))
+                   uris)))
+         batches)
+    (cl-letf (((symbol-function 'bluesky-conn-get-posts)
+               (lambda (_host _handle batch)
+                 (push batch batches)
+                 (futur-done
+                  (list :posts
+                        (vconcat
+                         (mapcar
+                          (lambda (uri)
+                            (list :uri uri :record (list :text uri)))
+                          batch)))))))
+      (let* ((response
+              (futur-blocking-wait-to-get-result
+               (bluesky--notifications-response-resolve-subject-posts
+                "host" "handle" (list :notifications notifications))))
+             (resolved (append (plist-get response :notifications) nil)))
+        (should (equal (sort (mapcar #'length batches) #'<) '(1 25)))
+        (should (equal
+                 (plist-get (plist-get (car resolved) :bluesky-subject-post)
+                            :uri)
+                 (car uris)))
+        (should (equal (plist-get (bluesky--notification-post (car resolved))
+                                  :uri)
+                       (car uris)))))))
+
+(ert-deftest bluesky-notifications-survive-subject-hydration-failure ()
+  (let* ((notification
+          (list :uri "at://did:plc:liker/app.bsky.feed.like/one"
+                :reason "like"
+                :reasonSubject "at://did:plc:me/app.bsky.feed.post/one"))
+         (response (list :notifications (vector notification))))
+    (cl-letf (((symbol-function 'bluesky-conn-get-posts)
+               (lambda (&rest _args)
+                 (futur-failed '(error "post unavailable")))))
+      (should
+       (equal
+        (futur-blocking-wait-to-get-result
+         (bluesky--notifications-response-resolve-subject-posts
+          "host" "handle" response))
+        response)))))
+
 (provide 'bluesky-test)
 
 ;;; bluesky-test.el ends here
