@@ -1068,13 +1068,14 @@ like and repost actions."
 
 (defun bluesky--update-notification-post (notification target-uri updater)
   "Return NOTIFICATION updated with UPDATER when it matches TARGET-URI."
-  (if (equal (plist-get notification :uri) target-uri)
-      (let* ((post (bluesky--notification-post notification))
-             (updated-post (and post
-                                (bluesky--update-post-view
-                                 post target-uri updater)))
-             (updated (copy-sequence notification)))
-        (when updated-post
+  (let ((post (bluesky--notification-post notification)))
+    (if (not (equal (plist-get post :uri) target-uri))
+        notification
+      (let ((updated-post (bluesky--update-post-view
+                           post target-uri updater))
+            (updated (copy-sequence notification)))
+        (if (plist-member notification :bluesky-subject-post)
+            (plist-put updated :bluesky-subject-post updated-post)
           (setq updated
                 (plist-put updated :record
                            (plist-get updated-post :record)))
@@ -1083,8 +1084,7 @@ like and repost actions."
             (when (plist-member updated-post prop)
               (setq updated
                     (plist-put updated prop (plist-get updated-post prop))))))
-        updated)
-    notification))
+        updated))))
 
 (defun bluesky--update-current-post-state (target-uri updater)
   "Update TARGET-URI in the active Bluesky component state with UPDATER.
@@ -1785,26 +1785,34 @@ HANDLE identifies the user whose home timeline is being resolved."
 
 (defun bluesky--notification-post (notification)
   "Return NOTIFICATION as a post-like app-view object, if possible."
-  (or (plist-get notification :bluesky-subject-post)
-      (when (bluesky--post-record-notification-p notification)
-        (list :uri (plist-get notification :uri)
-              :cid (plist-get notification :cid)
-              :author (plist-get notification :author)
-              :record (plist-get notification :record)
-              :labels (plist-get notification :labels)))))
+  (if (bluesky--post-record-notification-p notification)
+      (list :uri (plist-get notification :uri)
+            :cid (plist-get notification :cid)
+            :author (plist-get notification :author)
+            :record (plist-get notification :record)
+            :labels (plist-get notification :labels))
+    (plist-get notification :bluesky-subject-post)))
+
+(defun bluesky--notification-subject-post-uri (notification)
+  "Return the post URI that should be hydrated for NOTIFICATION.
+Post-record notifications already contain the reply, mention, or quote that
+should be rendered and therefore do not need subject hydration."
+  (unless (bluesky--post-record-notification-p notification)
+    (let ((record-subject-uri
+           (plist-get (plist-get (plist-get notification :record) :subject)
+                      :uri))
+          (reason-subject (plist-get notification :reasonSubject)))
+      (or record-subject-uri
+          (when (and reason-subject
+                     (string-match-p
+                      "/app\\.bsky\\.feed\\.post/" reason-subject))
+            reason-subject)))))
 
 (defun bluesky--notification-subject-post-uris (notifications)
   "Return unique post subject URIs found in NOTIFICATIONS."
   (seq-uniq
    (delq nil
-         (mapcar
-          (lambda (notification)
-            (let ((uri (plist-get notification :reasonSubject)))
-              (when (and uri
-                         (string-match-p
-                          "/app\\.bsky\\.feed\\.post/" uri))
-                uri)))
-          notifications))
+         (mapcar #'bluesky--notification-subject-post-uri notifications))
    #'equal))
 
 (defun bluesky--notification-post-batch (host handle uris)
@@ -1839,7 +1847,8 @@ HOST and HANDLE identify the authenticated AppView request."
              (mapcar
               (lambda (notification)
                 (if-let* ((post
-                           (gethash (plist-get notification :reasonSubject)
+                           (gethash
+                            (bluesky--notification-subject-post-uri notification)
                                     posts-by-uri)))
                     (plist-put (copy-sequence notification)
                                :bluesky-subject-post post)
