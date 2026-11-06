@@ -43,6 +43,12 @@
   "The maximum width of images in the Bluesky UI."
   :type 'integer)
 
+(defcustom bluesky-image-max-height 0.4
+  "Maximum thumbnail height as a fraction of the window's text area.
+Applies to post images, video thumbnails, and link previews.  When several
+windows show a buffer, use the smallest height so thumbnails fit in each."
+  :type 'float)
+
 (defcustom bluesky-ui-render-images t
   "Whether to render remote images in Bluesky buffers.
 Images are loaded asynchronously through `bluesky-ui--image-queue'."
@@ -54,6 +60,9 @@ Images are loaded asynchronously through `bluesky-ui--image-queue'."
 
 (defvar-local bluesky-ui-after-rerender-hook nil
   "Hook run after `bluesky-ui' rerenders a buffer for async media.")
+
+(defvar-local bluesky-ui--thumbnail-height nil
+  "Thumbnail height limit used by the most recent render, in pixels.")
 
 (defface bluesky-author-name
   '((t :inherit (bold font-lock-keyword-face)))
@@ -211,26 +220,13 @@ TIMESTR is a string such as 2024-11-29T22:31:30.465Z."
     (puthash key entry bluesky-ui--image-cache)
     entry))
 
-(defun bluesky-ui--restore-window-starts (starts)
-  "Restore window STARTS captured before a rerender."
-  (dolist (entry starts)
-    (let ((window (car entry))
-          (start (cdr entry)))
-      (when (window-live-p window)
-        (set-window-start window
-                          (min start (point-max))
-                          t)))))
-
 (defun bluesky-ui--rerender-preserving-position ()
   "Rerender the current VUI buffer while preserving point and window starts."
-  (let ((point (point))
-        (starts (mapcar (lambda (window)
-                          (cons window (window-start window)))
-                        (get-buffer-window-list (current-buffer) nil t))))
-    (vui-rerender vui--root-instance)
-    (run-hooks 'bluesky-ui-after-rerender-hook)
-    (goto-char (min point (point-max)))
-    (bluesky-ui--restore-window-starts starts)))
+  ;; VUI restores positions relative to the rendered content.  Keeping old
+  ;; character offsets would move point when an image replaces its placeholder.
+  (vui-rerender vui--root-instance)
+  (save-excursion
+    (run-hooks 'bluesky-ui-after-rerender-hook)))
 
 (defun bluesky-ui--image-rerender-buffers (buffers)
   "Rerender live VUI BUFFERS that requested an image."
@@ -334,6 +330,36 @@ TIMESTR is a string such as 2024-11-29T22:31:30.465Z."
   (when url
     (apply #'bluesky-ui--async-image-node url url properties)))
 
+(defun bluesky-ui--thumbnail-max-height ()
+  "Return the thumbnail height limit for the current buffer, in pixels."
+  (let ((windows (or (get-buffer-window-list (current-buffer) nil t)
+                     (list (selected-window)))))
+    (max 1 (floor (* bluesky-image-max-height
+                     (apply #'min (mapcar (lambda (window)
+                                            (window-body-height window t))
+                                          windows)))))))
+
+(defun bluesky-ui--resize-thumbnails (_window-or-frame)
+  "Update thumbnails when a window's height limit changes."
+  (when (and bluesky-ui-render-images
+             bluesky-ui--thumbnail-height
+             (bound-and-true-p vui--root-instance)
+             (/= bluesky-ui--thumbnail-height
+                 (bluesky-ui--thumbnail-max-height)))
+    (bluesky-ui--rerender-preserving-position)))
+
+(defun bluesky-ui--thumbnail-node (url)
+  "Return an asynchronous thumbnail for URL, bounded by the viewport."
+  (when (and url bluesky-ui-render-images)
+    (setq bluesky-ui--thumbnail-height (bluesky-ui--thumbnail-max-height))
+    ;; VUI's resize handling can skip height-only changes.  Rerender only
+    ;; when the thumbnail limit actually changes, preserving content position.
+    (add-hook 'window-size-change-functions
+              #'bluesky-ui--resize-thumbnails nil t)
+    (bluesky-ui--async-image-node
+     url url :max-width bluesky-image-max-width
+     :max-height bluesky-ui--thumbnail-height)))
+
 (defun bluesky-ui-author (author)
   "Return a VUI node for AUTHOR."
   (let* ((viewer (plist-get author :viewer))
@@ -419,10 +445,7 @@ REF can be a URL or a blob reference.  AUTHOR-DID is the uploading DID."
 AUTHOR-DID is the DID of the post author."
   (let* ((thumb-url (bluesky-ui--image-url-for-reference
                      host (plist-get external :thumb) author-did))
-         (thumb-node (when thumb-url
-                       (bluesky-ui--async-image-node
-                        thumb-url thumb-url
-                        :max-width bluesky-image-max-width))))
+         (thumb-node (bluesky-ui--thumbnail-node thumb-url)))
     (bluesky-ui--fragment
      thumb-node
      (when thumb-node
@@ -567,9 +590,7 @@ HOST is accepted for symmetry with post rendering and future media handling."
         (aspect (bluesky-ui--aspect-ratio-text
                  (plist-get video :aspectRatio))))
     (bluesky-ui--fragment
-     (when thumbnail
-       (bluesky-ui--async-image-node thumbnail thumbnail
-                                     :max-width bluesky-image-max-width))
+     (bluesky-ui--thumbnail-node thumbnail)
      (vui-newline)
      (bluesky-ui--text
       (string-join (delq nil (list "[video]"
@@ -627,8 +648,7 @@ included."
                          (or (plist-get image :thumb)
                              (bluesky-ui--image-url-for-reference
                               host (plist-get image :image) author-did))))
-              (bluesky-ui--async-image-node image-url image-url
-                                            :max-width bluesky-image-max-width)))
+              (bluesky-ui--thumbnail-node image-url)))
           (append (plist-get embed :images) nil)))
        (when-let* ((external (plist-get embed :external)))
          (bluesky-ui-external host external author-did))

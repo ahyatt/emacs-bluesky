@@ -65,10 +65,131 @@
       (cl-letf (((symbol-function 'vui-rerender)
                  (lambda (_root)
                    (erase-buffer)
-                   (insert "one\ntwo\nthree\n"))))
+                   (insert "one\ntwo\nthree\n")
+                   (goto-char original-point))))
         (bluesky-ui--rerender-preserving-position))
       (should hook-ran)
       (should (= (point) original-point)))))
+
+(vui-defcomponent bluesky-ui-test--image-feed ()
+  :render
+  (apply #'vui-vstack
+         (bluesky-ui--async-image-node "test-image" "unused")
+         (cl-loop for i below 80
+                  collect (vui-text (format "Stable line %02d" i)))))
+
+(ert-deftest bluesky-ui-image-load-preserves-visible-content ()
+  (save-window-excursion
+    (let ((buffer (generate-new-buffer " *bluesky-image-test*"))
+          (bluesky-ui--image-cache (make-hash-table :test 'equal))
+          (bluesky-ui-render-images t)
+          root)
+      (unwind-protect
+          (progn
+            ;; A loading entry avoids starting any network requests.
+            (bluesky-ui--image-entry-put "test-image" :status 'loading)
+            (setq root (vui-mount
+                        (vui-component 'bluesky-ui-test--image-feed)
+                        (buffer-name buffer)))
+            (setq-local vui--root-instance root)
+            (goto-char (point-min))
+            (search-forward "Stable line 20")
+            (beginning-of-line)
+            (set-window-start nil (point))
+            (forward-line 2)
+            (forward-char 4)
+            (let ((old-point (point))
+                  (old-start (window-start))
+                  (hook-point nil))
+              ;; Hooks must see VUI's restored position, and may move point.
+              (setq-local bluesky-ui-after-rerender-hook
+                          (list (lambda ()
+                                  (setq hook-point (point))
+                                  (goto-char (point-min)))))
+              (bluesky-ui--image-entry-put
+               "test-image" :status 'ready
+               :image '(image :type svg
+                              :data "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>"))
+              (bluesky-ui--image-rerender-buffers (list buffer))
+              ;; The seven-character placeholder became one image character.
+              (should (= (point) (- old-point 6)))
+              (should (= hook-point (point)))
+              (should (= (window-start) (- old-start 6)))
+              (should (looking-at "le line 22"))))
+        (kill-buffer buffer)))))
+
+(ert-deftest bluesky-ui-thumbnails-share-size-limits ()
+  (with-temp-buffer
+    (let* ((bluesky-ui--image-cache (make-hash-table :test 'equal))
+           (bluesky-ui-render-images t)
+           (bluesky-image-max-width 250)
+           (image '(image :type svg
+                          :data "<svg xmlns='http://www.w3.org/2000/svg' width='200' height='1800'/>"))
+           (media (list :$type "app.bsky.embed.images#view"
+                        :images (vector (list :thumb "local-image")))))
+      (bluesky-ui--image-entry-put "local-image" :status 'ready :image image)
+      (cl-letf (((symbol-function 'bluesky-ui--thumbnail-max-height)
+                 (lambda () 180)))
+        (dolist (node (list
+                      (bluesky-ui-embed-body nil media nil)
+                      (bluesky-ui-embed-body
+                       nil (list :$type "app.bsky.embed.images"
+                                 :images (vector (list :image "local-image"))) nil)
+                      (bluesky-ui-embed-body
+                       nil (list :$type "app.bsky.embed.recordWithMedia#view"
+                                 :media media) nil)
+                      (bluesky-ui-video (list :thumbnail "local-image"))
+                      (bluesky-ui-external nil (list :thumb "local-image") nil)))
+          (with-temp-buffer
+            (vui-render node (current-buffer))
+            (let ((spec (get-text-property (point-min) 'display)))
+              (should (eq (car spec) 'image))
+              (should (= (plist-get (cdr spec) :max-width) 250))
+              (should (= (plist-get (cdr spec) :max-height) 180)))))
+        ;; Avatar dimensions and the shared cached image remain independent.
+        (with-temp-buffer
+          (vui-render (bluesky-ui-author (list :avatar "local-image"))
+                      (current-buffer))
+          (let ((spec (get-text-property (point-min) 'display)))
+            (should (equal (plist-get (cdr spec) :height) '(1 . ch)))
+            (should-not (plist-member (cdr spec) :max-height))))
+        (should-not (plist-member (cdr image) :max-height))))))
+
+(ert-deftest bluesky-ui-thumbnail-height-uses-smallest-window ()
+  (let ((bluesky-image-max-height 0.4))
+    (cl-letf (((symbol-function 'get-buffer-window-list)
+               (lambda (&rest _) '(small large)))
+              ((symbol-function 'window-body-height)
+               (lambda (window &optional _pixels)
+                 (if (eq window 'small) 400 900))))
+      (should (= (bluesky-ui--thumbnail-max-height) 160)))
+    ;; Before the buffer is displayed, size for the destination window.
+    (cl-letf (((symbol-function 'get-buffer-window-list) (lambda (&rest _) nil))
+              ((symbol-function 'window-body-height)
+               (lambda (window &optional _pixels)
+                 (should (eq window (selected-window)))
+                 500)))
+      (should (= (bluesky-ui--thumbnail-max-height) 200)))))
+
+(ert-deftest bluesky-ui-thumbnail-resize-rerenders-only-on-height-change ()
+  (with-temp-buffer
+    (let ((bluesky-ui--thumbnail-height 180)
+          (vui--root-instance :root)
+          (height 180)
+          (renders 0))
+      (cl-letf (((symbol-function 'bluesky-ui--thumbnail-max-height)
+                 (lambda () height))
+                ((symbol-function 'bluesky-ui--rerender-preserving-position)
+                 (lambda ()
+                   (cl-incf renders)
+                   (setq bluesky-ui--thumbnail-height height))))
+        (bluesky-ui--resize-thumbnails nil)
+        (should (zerop renders))
+        (setq height 120)
+        (bluesky-ui--resize-thumbnails nil)
+        (should (= renders 1))
+        (bluesky-ui--resize-thumbnails nil)
+        (should (= renders 1))))))
 
 (ert-deftest bluesky-ui-thread-depth-does-not-render-quote-label ()
   (let ((rendered (bluesky-ui-test--render-string
