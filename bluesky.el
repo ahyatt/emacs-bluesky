@@ -7,7 +7,7 @@
 ;; Homepage: https://github.com/ahyatt/emacs-bluesky
 ;; Package-Requires: ((emacs "30.1") (plz "0.9.0") (futur "1.7") (vui "1.0.0"))
 ;; Keywords: outlines, hypermedia
-;; Version: 0.1.3
+;; Version: 0.1.4
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;;
 ;; This program is free software; you can redistribute it and/or
@@ -1849,7 +1849,7 @@ HOST and HANDLE identify the authenticated AppView request."
                 (if-let* ((post
                            (gethash
                             (bluesky--notification-subject-post-uri notification)
-                                    posts-by-uri)))
+                            posts-by-uri)))
                     (plist-put (copy-sequence notification)
                                :bluesky-subject-post post)
                   notification))
