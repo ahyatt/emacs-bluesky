@@ -28,6 +28,20 @@ If you are working from a local checkout instead, add the checkout directory to
 (require 'bluesky)
 #+end_src
 
+** Futur threads
+
+This library uses =futur= for async.  Some systems may have issues if threading is
+turned on for this library.  Because of this, we recommend disabling Futur
+threads for Bluesky.  Put this near the start of your Emacs configuration,
+before loading =futur=, =bluesky=, or any other package that loads Futur:
+
+#+begin_src emacs-lisp
+(setq futur-use-threads nil)
+#+end_src
+
+Futur selects its scheduler when it loads, so changing this variable afterward
+has no effect; restart Emacs if Futur is already loaded.  This setting applies
+to all packages using Futur, not just Bluesky.
 * Credentials
 
 =M-x bluesky= looks up credentials with =auth-source= for the host in
