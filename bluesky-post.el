@@ -784,11 +784,13 @@ validated media plists in the same shape used by compose buffers."
   (when reply-to
     (let ((start (point)))
       (insert (bluesky-post--reply-context reply-to))
+      ;; Read-only and stickiness are text properties, not overlay properties.
+      ;; Protect insertion before the context, but leave the reply body editable.
+      (add-text-properties start (point)
+                           '(read-only t front-sticky (read-only)
+                             rear-nonsticky (read-only)))
       (setq bluesky-post-context-overlay (make-overlay start (point)))
-      (overlay-put bluesky-post-context-overlay 'face 'bluesky-post-context)
-      (overlay-put bluesky-post-context-overlay 'read-only t)
-      (overlay-put bluesky-post-context-overlay 'front-sticky t)
-      (overlay-put bluesky-post-context-overlay 'rear-nonsticky t))))
+      (overlay-put bluesky-post-context-overlay 'face 'bluesky-post-context))))
 
 ;;;###autoload
 (cl-defun bluesky-post-compose (&key host session reply-to source-buffer)

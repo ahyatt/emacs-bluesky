@@ -28,6 +28,36 @@
   "Return FACET's first feature."
   (aref (plist-get facet :features) 0))
 
+(ert-deftest bluesky-post-reply-context-is-read-only ()
+  (let (compose-buffer)
+    (cl-letf (((symbol-function 'pop-to-buffer)
+               (lambda (buffer &rest _) (setq compose-buffer buffer))))
+      (unwind-protect
+          (progn
+            (bluesky-post-compose
+             :reply-to '(:author (:handle "alice.test" :displayName "Alice")
+                         :record (:text "Original post")))
+            (with-current-buffer compose-buffer
+              (let ((content-start (marker-position bluesky-post-content-start)))
+                (dolist (position (list (point-min)
+                                        (+ (point-min) 2)
+                                        (1- content-start)))
+                  (goto-char position)
+                  (should-error (insert "x") :type 'text-read-only)
+                  (should-error (delete-char 1) :type 'text-read-only))
+                (goto-char content-start)
+                (should-error (delete-char -1) :type 'text-read-only)
+                (insert "My reply")
+                (goto-char content-start)
+                (insert "First: ")
+                (delete-char 1)
+                (should (equal (bluesky-post--content-string) "First: y reply"))
+                (should (equal (buffer-substring-no-properties
+                                (point-min) content-start)
+                               (bluesky-post--reply-context bluesky-post-reply-to))))))
+        (when (buffer-live-p compose-buffer)
+          (kill-buffer compose-buffer))))))
+
 (ert-deftest bluesky-post-character-count-uses-graphemes ()
   (should (= (bluesky-post--character-count (string ?e #x0301)) 1))
   (should (= (bluesky-post--character-count "🇺🇸") 1))
